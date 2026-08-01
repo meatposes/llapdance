@@ -4,7 +4,19 @@ Live document — updated as work progresses. See VALIDATION.md for the full
 writeup and SPEC_REVIEW.md for the "are we still on track" assessment (now
 partly resolved - see its update note at the top).
 
-## Session complete (2026-08-01, continued) — 5th engine (vLLM), 3 real bugs found+fixed, fork-provenance practice adopted
+## Session complete (2026-08-01, continued) — swept every remaining fitting model (16 total), groundwork for pruning
+
+Direct request: test everything left that would fit, so a real pruning decision can follow.
+
+- [x] 15 models run in one batch (14 OpenArc/OpenVINO + 1 new vLLM candidate, `hub/models--Qwen--Qwen3-0.6B`) - no crashes, no new infra bugs (the vLLM fixes from the prior session held up on a second, different model).
+- [x] 13 clean (10 perfect 10/10, 3 with a single genuine minor miss - checked each, real LLM limitations not bugs).
+- [x] `MeatPoses/NousCoder-14B-int8-ov` first scored 4/10 - my own mistake (mislabeled non-reasoning in the suite generator, default `max_tokens: 64` truncated real `<think>` traces). Rerun with `max_tokens: 512` confirmed 10/10.
+- [x] **Real pruning candidate identified**: `Phi-4-mini-FastDraft-120M-int8-ov` scored 2/10, but it's a speculative-decoding draft model (name says so) never meant to answer standalone - this harness can't meaningfully evaluate a draft model in its actual paired role, so the low score is expected and uninformative, not evidence of a defect. Worth a conversation about whether/how to keep it cataloged.
+- [x] Skipped 2 raw HF-cache models (`DeepSeek-Coder-V2-Lite-Instruct` 30G, `NousCoder-14B` HF-cache-bf16 28G) as too tight against ~32GB VRAM, consistent with the earlier `Qwen3.5-27B` (52G) call.
+- [x] Combined with prior confirmed-broken models (2 MoE checkpoints, `phi-2-int4-ov`), 29 of the catalog's real models now have a current verdict.
+- [x] Committed.
+
+## Prior session (2026-08-01, continued) — 5th engine (vLLM), 3 real bugs found+fixed, fork-provenance practice adopted
 
 Follow-up to model-consolidation cleanup: 3 real raw HF bf16 models (deepseek_v2/gemma3/qwen3) couldn't load on any existing engine. Built `llapdance/plugins/engine/vllm.py` from the real running `vllm-urak` production container's actual `docker inspect` output, not guessed. Also added `vllm` to `model_catalog.py`'s safetensors-compatible engines list.
 

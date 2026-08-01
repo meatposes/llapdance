@@ -1,0 +1,51 @@
+# Untested (per `llapdance models --results-dir`) - part of the
+# remaining-catalog sweep before pruning decisions.
+name: validation-openarc-phi4-mini-fastdraft
+
+backends:
+  - name: openarc-phi4-mini-fastdraft
+    source:
+      mode: prebuilt
+      image: "openarc:dev"
+    model: "Phi-4-mini-FastDraft-120M-int8-ov"
+    model_path: "/models/phi4-mini-fastdraft"
+    engine: "openarc"
+    port: 8000
+    volumes:
+      /mnt/ignite/LLM/models/OpenVINO/Phi-4-mini-FastDraft-120M-int8-ov: /models/phi4-mini-fastdraft
+    params:
+      backend_specific:
+        model_name: "phi4-mini-fastdraft"
+        model_type: "llm"
+        openarc_engine: "ovgenai"
+    health_path: "/v1/models"
+    startup_timeout_s: 120
+    network:
+      mode: disabled
+
+device_target:
+  mode: indices
+  indices: [3]
+
+execution_target:
+  mode: local
+
+benchmark_adapters:
+  - adapter: generic-http
+    config:
+      model: "phi4-mini-fastdraft"
+      prompt: "In one sentence, what is a hash table?"
+      max_tokens: 64
+      num_requests: 3
+
+coherence_adapters:
+  - adapter: fixed-questions
+    config:
+      model: "phi4-mini-fastdraft"
+
+storage:
+  flat_file_dir: "./results"
+  extra_adapters: []
+
+min_free_vram_mb: 4096
+allow_unknown_vram: false
