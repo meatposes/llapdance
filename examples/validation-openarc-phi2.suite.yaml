@@ -1,0 +1,51 @@
+# Untested (per `llapdance models --results-dir`) - real target from the
+# catalog sweep.
+name: validation-openarc-phi2
+
+backends:
+  - name: openarc-phi2
+    source:
+      mode: prebuilt
+      image: "openarc:dev"
+    model: "phi-2-int4-ov"
+    model_path: "/models/phi2"
+    engine: "openarc"
+    port: 8000
+    volumes:
+      /mnt/ignite/LLM/models/OpenVINO/phi-2-int4-ov: /models/phi2
+    params:
+      backend_specific:
+        model_name: "phi2"
+        model_type: "llm"
+        openarc_engine: "ovgenai"
+    health_path: "/v1/models"
+    startup_timeout_s: 120
+    network:
+      mode: disabled
+
+device_target:
+  mode: indices
+  indices: [3]
+
+execution_target:
+  mode: local
+
+benchmark_adapters:
+  - adapter: generic-http
+    config:
+      model: "phi2"
+      prompt: "In one sentence, what is a hash table?"
+      max_tokens: 64
+      num_requests: 3
+
+coherence_adapters:
+  - adapter: fixed-questions
+    config:
+      model: "phi2"
+
+storage:
+  flat_file_dir: "./results"
+  extra_adapters: []
+
+min_free_vram_mb: 4096
+allow_unknown_vram: false

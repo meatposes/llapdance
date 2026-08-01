@@ -430,6 +430,24 @@ Reading `~/Arcaine/src/modeling/qwen3_5/loader.cpp` (the *dense* Qwen3.5 loader,
 
 No, there are no additional models that work on Arcaine beyond the two already validated (`unsloth/Qwen3.6-27B-NVFP4`, `sakamakismile/Huihui-...`) plus `diffusion_gemma`. The two MoE candidates found are real, confirmed-broken by a genuine engine-side tensor-format gap (attempted and documented, not just asserted), and the one plausibly-fixable dense bf16 candidate (`Qwen/Qwen3.5-27B`) needs multi-GPU support this harness doesn't have yet to actually run.
 
+## Fourteenth session — 3 more catalog models, a real `fixed-questions` gap fixed, a real OpenArc+model crash root-caused (2026-08-01, continued)
+
+Swept 3 more untested OpenArc models while a large download ran in the background.
+
+### Real gap fixed first: `fixed-questions`' `max_tokens` was hardcoded to 64
+
+Before running `DeepSeek-R1-Distill-Qwen-7B-int4-ov` (a reasoning model), fixed the exact issue found last session with `OpenVINO/Qwen3-0.6B-int4-ov`: `FixedQuestionCoherence._ask()` hardcoded `max_tokens: 64` in the `/v1/chat/completions` body with no way to override it from a suite - meaning every reasoning-model sweep would hit the same `<think>`-truncation false-negative no matter what the suite YAML said. Added a `max_tokens` config key (default 64, unchanged for every already-validated suite). 2 new tests (`tests/test_fixed_questions_coherence.py`, real `httpx.MockTransport` requests, not mocks of internal calls) confirm the default is preserved and the override actually reaches the request body. 108 tests passing.
+
+### Real results
+
+| Model | Result |
+|---|---|
+| `Phi-4-mini-instruct-int4-ov` | Clean: 84.1 tok/s, 10/10 coherence. |
+| `DeepSeek-R1-Distill-Qwen-7B-int4-ov` (`max_tokens: 512`) | Clean: 104.5 tok/s, **10/10 coherence** - confirms the `max_tokens` fix above actually works: a reasoning model now gets real answers instead of truncated `<think>` traces. |
+| `phi-2-int4-ov` | **Real crash, root-caused, not guessed.** `generic-http` failed with `httpx.RemoteProtocolError: Server disconnected without sending a response`. Reproduced manually outside the harness to get the real server-side log (the crashed container's own logs are lost once `run_backend`'s `finally: execution.stop()` tears it down - the same gap `TestedStatus` documents). Root cause: `phi-2-int4-ov`'s tokenizer has no `chat_template` set, and OpenArc's `/v1/chat/completions` worker calls a chat-template function unconditionally - `ValueError: Cannot use chat template functions because tokenizer.chat_template is not set...` on the very first real inference call, which triggers OpenArc's own auto-unload of the crashed worker. Confirmed via full container logs: model *loads* successfully (`POST /openarc/load` returns 200), the first 3 generate requests return `200` with **zero tokens** (worker already dead, response drained empty), then the connection hard-drops once the worker is fully gone - explaining exactly the failure mode `generic-http` hit. Genuine OpenArc+model incompatibility (this specific int4-ov conversion never got a chat template baked in), not a llapdance bug. |
+
+Clean teardown confirmed for all three (`docker ps -a`).
+
 ## Updated adapter status (see README.md, now reflects reality instead of aspiration)
 
 | Adapter | Status |
