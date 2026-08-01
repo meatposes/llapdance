@@ -1,0 +1,56 @@
+# Cataloged as untested (OpenVINO IR, model_type qwen3) via the new
+# `llapdance models --results-dir` cross-referencing (see VALIDATION.md
+# "Eleventh session"). Tiny/fast model, good coverage expansion for OpenArc
+# beyond the Phi-4-mini int4 model already validated.
+name: validation-openarc-qwen3-0.6b
+
+backends:
+  - name: openarc-qwen3-0.6b
+    source:
+      mode: prebuilt
+      image: "openarc:dev"
+    model: "Qwen3-0.6B-int4-ov"
+    model_path: "/models/qwen3-0.6b"
+    engine: "openarc"
+    port: 8000
+    volumes:
+      /mnt/ignite/LLM/models/OpenVINO/Qwen3-0.6B-int4-ov: /models/qwen3-0.6b
+    params:
+      backend_specific:
+        model_name: "qwen3-0.6b"
+        model_type: "llm"
+        openarc_engine: "ovgenai"
+    # GOTCHA: OpenArc's /v1/models returns 200 with an EMPTY list before any
+    # model is loaded - only confirms the server process is up, not that a
+    # model is servable. Real load happens via post_start_requests.
+    health_path: "/v1/models"
+    startup_timeout_s: 120
+    network:
+      mode: disabled
+
+device_target:
+  mode: indices
+  indices: [3]
+
+execution_target:
+  mode: local
+
+benchmark_adapters:
+  - adapter: generic-http
+    config:
+      model: "qwen3-0.6b"
+      prompt: "In one sentence, what is a hash table?"
+      max_tokens: 64
+      num_requests: 3
+
+coherence_adapters:
+  - adapter: fixed-questions
+    config:
+      model: "qwen3-0.6b"
+
+storage:
+  flat_file_dir: "./results"
+  extra_adapters: []
+
+min_free_vram_mb: 4096
+allow_unknown_vram: false

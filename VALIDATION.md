@@ -381,6 +381,24 @@ Outcome is one of `pass` (100% coherence), `partial` (some failures), or `ran` (
 
 Wired into both the CLI (`llapdance models --results-dir DIR`, defaults to `./results`) and the MCP `list_models` tool (`results_dir` param, same default).
 
+## Twelfth session — sweeping more of the catalog, using the new tested-status feature to pick targets (2026-08-01, continued)
+
+Direct follow-up: with `tested` now real, used it to find genuinely-untested models and ran several.
+
+### Confirmed, empirically, why the two `qwen3_5_moe` (missing `_text`) models can't load
+
+Earlier sessions flagged `AEON-7/Ornith-1.0-35B-...-NVFP4` and (found this session) `urakozz/Ornith-1.0-35B-int4-AutoRound` as likely-incompatible from reading a comment. Read the real dispatch code this time instead of trusting a comment (a lesson from this session's own `NVFP4_DPAS` finding - comments can be wrong): `ModelRegistry::create()` (`~/Arcaine/src/common/registry.cpp`) does an exact `unordered_map` lookup on `model_type` against three registered keys - `qwen3_5`, `qwen3_5_moe_text`, `gemma4_unified` - and throws if it's not an exact match. `qwen3_5_moe` isn't one of them.
+
+**Validated live**: booted `urakozz/Ornith-1.0-35B-int4-AutoRound` against `arcaine-server:qwen35fix` directly (bypassing the suite runner, since this needed the raw crash log). Container exits in ~2s: `[error] No model architecture registered for model_type='qwen3_5_moe'. Registered: qwen3_5 qwen3_5_moe_text gemma4_unified`. Exactly as the registry code predicts. This is also a live demonstration of the `TestedStatus` gap documented in the model-catalog work above: this crash happens before `run_backend` ever reaches its storage step, so it will never show up as `tested=[...]` in the catalog - it's real, confirmed-broken, and permanently invisible to the automated tested-status feature. Didn't bother re-running the AEON-7 NVFP4 variant - same `model_type`, same registry, same outcome, no new information.
+
+### OpenArc + a tiny untested model - a real config-mismatch finding, not a bug
+
+Ran `OpenVINO/Qwen3-0.6B-int4-ov` (previously `untested` per the new catalog feature) against OpenArc. Real numbers: 228 tok/s (small model, as expected), but only **5/10** fixed-questions passed. Checked the actual failures before concluding anything (per this project's own standing rule - never guess): every failure was the model's reasoning trace (`<think>...`) still running when `max_tokens: 64` cut it off - the answer was never reached, not wrong. This is a real, useful finding but not a model or harness bug: `fixed-questions`' benchmark config assumes non-reasoning models fit an answer in 64 tokens, which doesn't hold for Qwen3's `<think>` reasoning models. Anyone sweeping a reasoning-capable checkpoint needs either a much larger `max_tokens` or `enable_thinking: false` in the chat template kwargs - this harness doesn't yet have a helper for that distinction (worth a real follow-up, not done here).
+
+### Diffusion Gemma refreshed on the current image
+
+Re-ran `examples/validation-arcaine.suite.yaml` (the previously-validated `diffusion_gemma` model, `arcaine-server:latest` - the stale-image KV-cache bug was Qwen3.5-specific, `Qwen35Model::forward`, so the old image is still fine for this model family). 16.35 tok/s, **10/10** coherence, clean teardown - now has a real stored record so the tested-status feature reports it instead of `untested`. Confirmed live: `llapdance models .../RedHatAI --results-dir ./results` now shows `arcaine:pass(10/10)` where it previously showed `untested` (correctly, since the earlier validation's result file wasn't in the current results directory).
+
 ## Updated adapter status (see README.md, now reflects reality instead of aspiration)
 
 | Adapter | Status |

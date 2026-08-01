@@ -4,7 +4,16 @@ Live document — updated as work progresses. See VALIDATION.md for the full
 writeup and SPEC_REVIEW.md for the "are we still on track" assessment (now
 partly resolved - see its update note at the top).
 
-## Session complete (2026-08-01, continued) — model catalog now shows real test history
+## Session complete (2026-08-01, continued) — swept more of the catalog using the new tested-status feature
+
+Direct follow-up: "sweep some more models in our catalog." Used the new `tested` field to pick real targets.
+
+- [x] Confirmed (real container test, reading Arcaine's actual `ModelRegistry::create()` dispatch code rather than trusting a comment) that both `qwen3_5_moe`-labeled models (`urakozz/Ornith-1.0-35B-int4-AutoRound`, `AEON-7/Ornith-1.0-35B-...`) fail fast and predictably: exact registry key mismatch, not a fuzzy/partial one. This crash type is permanently invisible to the tested-status feature (crashes before `RunResult` storage) - a real, confirmed limitation, not a hypothetical one.
+- [x] **Real finding, not a bug**: OpenArc + `Qwen3-0.6B-int4-ov` got 5/10 fixed-questions - checked the actual failures, all were `<think>` reasoning traces truncated by `max_tokens: 64` before reaching an answer. Config mismatch (reasoning models need bigger budgets or thinking disabled), not model or harness incorrectness.
+- [x] Refreshed `diffusion_gemma` on Arcaine (10/10, 16.35 tok/s) - now has a current stored record, confirmed live via `llapdance models --results-dir` flipping from `untested` to `arcaine:pass(10/10)`.
+- [x] Full test suite still green, committed.
+
+## Prior session (2026-08-01, continued) — model catalog now shows real test history
 
 Direct follow-up to a question: did the model catalog indicate whether a model actually ran (pass/fail) on a backend before, vs just could-run-on? It didn't. Built it:
 
