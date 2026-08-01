@@ -1,20 +1,46 @@
-"""llama-benchy adapter - INTENTIONAL STUB.
+"""llama-benchy adapter (hellohal2064/llama-benchy). Was long documented as
+an intentional stub here - a prior session's `curl` probing against guessed
+routes (`/api`, `/openapi.json`) 404'd, and concluded (wrongly) that the
+running container exposed no API. Re-investigated by reading the real
+container's own source (`docker exec llama-benchy-web grep -n '@app.route'
+/app/web/app.py`) instead of guessing at routes - it's a genuine Flask app
+with a real, if undocumented, JSON API wrapping the `llama-benchy` CLI as a
+subprocess:
 
-While building this out, llama-benchy (hellohal2064/llama-benchy) was found
-to expose only a Flask web dashboard (GET /, static assets) with no
-documented/discoverable REST API - `curl` against plausible routes
-(/api, /openapi.json) returned 404, and the container logs show no JSON
-endpoints being hit. Wrapping it correctly requires either its actual API
-(if one exists undocumented) or scripting its web UI, neither of which
-should be guessed at.
+  - `POST /api/start` `{base_url, model, tokenizer, test_group,
+    custom_config}` -> `{run_id}`. `base_url`/`model` are passed straight to
+    the CLI's own `--base-url`/`--model` (confirmed in `web/engine.py`'s
+    `_build_command()`) - genuinely arbitrary OpenAI-compatible endpoint,
+    not llama-benchy-specific.
+  - `GET /api/run/<run_id>/stream` - SSE progress
+    (`{"status","progress","current_test","new_lines","done","error"}`),
+    the only way to know when a run finished (no plain polling endpoint).
+  - `GET /api/results/<run_id>/export/json` - the raw structured result
+    (`{"model","benchmarks":[{"context_size","prompt_size","response_size",
+    "concurrency","pp_throughput":{"mean","std"},
+    "tg_throughput":{"mean","std"},"peak_throughput":{...},"ttfr":{...}},
+    ...]}`), confirmed via `web/engine.py::format_result_rows()`.
 
-Registered anyway so a suite config referencing `adapter: llama-benchy`
-fails with this explanation instead of a bare KeyError. Replace `run()`
-once the real integration point is confirmed.
+Distinct from every other benchmark adapter here: this is a genuinely
+ASYNC job API (start -> poll/stream -> fetch), not a synchronous
+request/response prober, and it needs a SEPARATE endpoint from the model
+server under test - `dashboard_url` (this Flask app, e.g.
+`http://localhost:5059`) is not the same thing as `endpoint` (the model
+server `base_url` this adapter tells llama-benchy to hit).
+
+Presets (`test_group`, real values read from `web/engine.py::TEST_GROUPS`,
+not invented): `quick_check` (default, ~3 min, PP2048+TG128 at concurrency
+1), `baseline`, `shallow_context`, `deep_context`, `all_leaderboard`
+(~90 min). `test_group: "custom"` + a `custom_config` dict bypasses the
+presets entirely (same shape as a `TEST_GROUPS` entry - `pp`/`tg`/`depth`/
+`concurrency`/`enable_prefix_caching`/`runs`).
 """
 from __future__ import annotations
 
+import json
 from typing import Any
+
+import httpx
 
 from llapdance.core.result import BenchmarkResult
 from llapdance.plugins.base import BenchmarkAdapter
@@ -28,11 +54,62 @@ class LlamaBenchyBenchmark(BenchmarkAdapter):
         self._config = config or {}
 
     def run(self, endpoint: str, config: dict[str, Any]) -> BenchmarkResult:
-        raise NotImplementedError(
-            "llama-benchy adapter is not implemented: no documented REST API was "
-            "found on the running container (only a Flask dashboard on '/'). "
-            "Use the 'generic-http' adapter, or confirm llama-benchy's real API "
-            "and implement this adapter against it."
+        cfg = {**self._config, **config}
+        dashboard_url = cfg.get("dashboard_url")
+        if not dashboard_url:
+            raise ValueError(
+                "llama-benchy adapter requires 'dashboard_url' - the llama-benchy web "
+                "dashboard's OWN endpoint (e.g. 'http://localhost:5059'), distinct from "
+                "`endpoint` (the model server under test, passed through as base_url)."
+            )
+        model = cfg.get("model", "default")
+
+        start_payload: dict[str, Any] = {
+            "base_url": endpoint.rstrip("/"),
+            "model": model,
+            "tokenizer": cfg.get("tokenizer", model),
+            "test_group": cfg.get("test_group", "quick_check"),
+        }
+        if "custom_config" in cfg:
+            start_payload["custom_config"] = cfg["custom_config"]
+
+        stream_timeout = cfg.get("timeout", 1800)
+
+        with httpx.Client(base_url=dashboard_url.rstrip("/"), timeout=60) as client:
+            resp = client.post("/api/start", json=start_payload)
+            resp.raise_for_status()
+            run_id = resp.json()["run_id"]
+
+            with client.stream("GET", f"/api/run/{run_id}/stream", timeout=stream_timeout) as stream:
+                for line in stream.iter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    event = json.loads(line[len("data: "):])
+                    if event.get("done"):
+                        if event.get("error"):
+                            raise RuntimeError(f"llama-benchy run {run_id} failed: {event['error']}")
+                        break
+
+            export = client.get(f"/api/results/{run_id}/export/json")
+            export.raise_for_status()
+            result_data = export.json()
+
+        pp_means = [b["pp_throughput"]["mean"] for b in result_data.get("benchmarks", []) if b.get("pp_throughput")]
+        tg_means = [b["tg_throughput"]["mean"] for b in result_data.get("benchmarks", []) if b.get("tg_throughput")]
+        ttfr_means = [b["ttfr"]["mean"] for b in result_data.get("benchmarks", []) if b.get("ttfr")]
+
+        def avg(values: list[float]) -> float:
+            return sum(values) / len(values) if values else 0.0
+
+        return BenchmarkResult(
+            adapter=self.name,
+            metrics={
+                "avg_pp_throughput": avg(pp_means),
+                "avg_tg_throughput": avg(tg_means),
+                "avg_ttfr_ms": avg(ttfr_means),
+                "benchmark_count": float(len(result_data.get("benchmarks", []))),
+            },
+            raw={"run_id": run_id, "result": result_data},
         )
 
 

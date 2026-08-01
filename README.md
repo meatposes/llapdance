@@ -67,7 +67,8 @@ Copy `examples/example.suite.yaml` and edit it for a real backend — nothing in
 
 ## Known gaps / not yet built
 
-- `llama-benchy` and `guidellm` benchmark adapters are both **documented stubs that raise `NotImplementedError`** — real API/library limitations found for each (see `VALIDATION.md`), not guessed at.
+- `llama-benchy` benchmark adapter — **wired up for real and validated live**, twice (direct adapter call + full CLI), against the real production `llama-cpp-bonsai`. Long documented as a stub on the mistaken belief that the running container exposed no API - a fresh investigation reading the container's own source (not guessing at routes) found a real Flask JSON API and a real async start/poll/fetch job shape, distinct from every other synchronous benchmark adapter here (needs its own `dashboard_url`). Found and fixed a real gotcha along the way: the dashboard runs on its own docker network, so `base_url` must be reachable from inside *that* container, not the host. See `VALIDATION.md`.
+- `guidellm` benchmark adapter remains a **documented stub that raises `NotImplementedError`** — a real library limitation found (see `VALIDATION.md`), not guessed at.
 - ~~No remote (SSH) execution target yet~~ — **built and validated**, `prebuilt` only (no remote build-from-source yet).
 - No embedded-DB or Prometheus/Grafana storage adapters yet — `flat-file` (default) and `opensearch` (opt-in) are the only two. Image/model catalog labels also only live in flat-file for now, not mirrored into OpenSearch when that adapter is active.
 - VRAM-free-memory detection works for NVIDIA (`nvidia-smi`) and Intel (`xpumcli`, falling back to `clinfo` enumeration-only, falling back to `lspci` identification-only on a host with no compute-runtime tooling at all — confirmed necessary on a real remote host). Any tier below `xpumcli` means free-VRAM is unknown and `allow_unknown_vram: true` is required. AMD is still unimplemented.
