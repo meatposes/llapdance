@@ -14,8 +14,17 @@ from llapdance.tui.screens import (
     ModelBrowserScreen,
     _coerce_sweep_value,
     _default_model_path_and_volumes,
+    _short_model_name,
     _tested_summary,
 )
+
+
+def test_short_model_name_strips_scan_root_prefix():
+    # real complaint fixed: the table showed the full absolute host path
+    # (e.g. /mnt/ignite/LLM/models/AEON-7/Ornith-1.0-...) - only the last
+    # two segments should be shown
+    assert _short_model_name("/mnt/ignite/LLM/models/AEON-7/Ornith-1.0-abc") == "AEON-7/Ornith-1.0-abc"
+    assert _short_model_name("/mnt/ignite/LLM/models/OpenVINO/phi-2-int4-ov") == "OpenVINO/phi-2-int4-ov"
 
 
 def test_gguf_model_path_and_volumes_mount_parent_dir(tmp_path):
@@ -56,8 +65,13 @@ def test_model_browser_scans_real_directory_and_populates_table(tmp_path):
 
             table = screen.query_one("#models", DataTable)
             assert table.row_count == 1
+            # real complaint fixed: "Model" (short relative name) is the
+            # first column, no full absolute path anywhere in the row
+            first_row = table.get_row_at(0)
+            assert str(first_row[0]) == _short_model_name(str(tmp_path / "test-model.gguf"))
+            assert str(tmp_path) not in str(first_row[0])
             status = screen.query_one("#status", Static).render()
-            assert "1 models found" in str(status)
+            assert "1 found" in str(status)
 
     asyncio.run(scenario())
 
@@ -270,5 +284,26 @@ def test_build_screen_generate_applies_real_sweep_axis(tmp_path):
             assert len(sweep) == 1
             assert sweep[0].param == "params.shared.context_size"
             assert sweep[0].values == [2048, 4096]  # real ints, not strings
+
+    asyncio.run(scenario())
+
+
+def test_configure_button_visible_at_a_normal_terminal_size():
+    # real complaint fixed: DataTable defaulted to filling ALL remaining
+    # vertical space, pushing the Configure button below the visible
+    # screen entirely at any normal (non-huge) terminal height. Confirmed
+    # via a real pilot check at 100x30 before the fix: the button's
+    # region.y (31) landed one row past the screen height (30).
+    load_builtin_adapters()
+
+    async def scenario():
+        app = LLAPDanceApp()
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            await pilot.click("#by-model-btn")
+            await pilot.pause()
+            screen = app.screen
+            btn = screen.query_one("#configure-btn")
+            assert btn.region.offset in screen.size.region
 
     asyncio.run(scenario())

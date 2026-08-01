@@ -27,10 +27,20 @@ class LLAPDanceApp(App):
     # region.x landed exactly at the screen's width, i.e. one column past
     # the last visible one). Constrain the flexible controls to share the
     # row instead of claiming all of it.
+    # Real bug found from direct user feedback ("requires a HUGE screen"):
+    # DataTable defaults to filling ALL remaining vertical space in its
+    # container - confirmed via a real pilot check at a normal 100x30
+    # terminal, where the "Configure" button's region.y (31) landed one
+    # row PAST the visible screen height (30) entirely, because the table
+    # claimed rows 2-30 for itself with a dozen-model catalog. Capping the
+    # table's height (it scrolls internally past that) leaves the
+    # button/status row always visible regardless of terminal size or how
+    # many models were scanned.
     CSS = """
     Horizontal > Input { width: 1fr; }
     Horizontal > Select { width: 1fr; }
     Horizontal > Button { width: auto; }
+    DataTable { height: 12; }
     """
 
     def __init__(self) -> None:
