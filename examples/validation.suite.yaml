@@ -12,10 +12,11 @@ backends:
     source:
       mode: prebuilt
       image: "llama-cpp-bonsai:meat6-hardened"
-    # NOTE: Ternary-Bonsai-27B-dspark-Q4_1.gguf was tried first and crashes
-    # this image with a tokenizer-init SIGSEGV on any /v1/chat/completions
-    # request (loads fine, dies on first real request) - see VALIDATION.md
-    # "bug found" section. Q2_0 below is the already-proven-good variant.
+    # NOTE: Ternary-Bonsai-27B-dspark-Q4_1.gguf was tried first and crashed
+    # with a tokenizer-init SIGSEGV - invalid test setup, not a real bug:
+    # "-dspark" is a speculative-decode draft artifact, not a standalone
+    # servable model. See VALIDATION.md "Retracted claim" section. Q2_0
+    # below is a real, standalone, already-proven-good model.
     model: "Ternary-Bonsai-27B-Q2_0"
     port: 8080
     volumes:
