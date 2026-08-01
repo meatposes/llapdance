@@ -1,0 +1,51 @@
+# Untested (per `llapdance models --results-dir`) - real target from the
+# catalog sweep.
+name: validation-openarc-tinyllama
+
+backends:
+  - name: openarc-tinyllama
+    source:
+      mode: prebuilt
+      image: "openarc:dev"
+    model: "TinyLlama-1.1B-Chat-v1.0-int4-ov"
+    model_path: "/models/tinyllama"
+    engine: "openarc"
+    port: 8000
+    volumes:
+      /mnt/ignite/LLM/models/OpenVINO/TinyLlama-1.1B-Chat-v1.0-int4-ov: /models/tinyllama
+    params:
+      backend_specific:
+        model_name: "tinyllama"
+        model_type: "llm"
+        openarc_engine: "ovgenai"
+    health_path: "/v1/models"
+    startup_timeout_s: 120
+    network:
+      mode: disabled
+
+device_target:
+  mode: indices
+  indices: [3]
+
+execution_target:
+  mode: local
+
+benchmark_adapters:
+  - adapter: generic-http
+    config:
+      model: "tinyllama"
+      prompt: "In one sentence, what is a hash table?"
+      max_tokens: 64
+      num_requests: 3
+
+coherence_adapters:
+  - adapter: fixed-questions
+    config:
+      model: "tinyllama"
+
+storage:
+  flat_file_dir: "./results"
+  extra_adapters: []
+
+min_free_vram_mb: 4096
+allow_unknown_vram: false

@@ -1,0 +1,52 @@
+# Untested (per `llapdance models --results-dir`) - real target from the
+# catalog sweep.
+name: validation-openarc-qwen3-8b
+
+backends:
+  - name: openarc-qwen3-8b
+    source:
+      mode: prebuilt
+      image: "openarc:dev"
+    model: "Qwen3-8B-int8-ov"
+    model_path: "/models/qwen3-8b"
+    engine: "openarc"
+    port: 8000
+    volumes:
+      /mnt/ignite/LLM/models/OpenVINO/Qwen3-8B-int8-ov: /models/qwen3-8b
+    params:
+      backend_specific:
+        model_name: "qwen3-8b"
+        model_type: "llm"
+        openarc_engine: "ovgenai"
+    health_path: "/v1/models"
+    startup_timeout_s: 120
+    network:
+      mode: disabled
+
+device_target:
+  mode: indices
+  indices: [3]
+
+execution_target:
+  mode: local
+
+benchmark_adapters:
+  - adapter: generic-http
+    config:
+      model: "qwen3-8b"
+      prompt: "In one sentence, what is a hash table?"
+      max_tokens: 64
+      num_requests: 3
+
+coherence_adapters:
+  - adapter: fixed-questions
+    config:
+      model: "qwen3-8b"
+      max_tokens: 512   # Qwen3 is a reasoning-capable family - avoid the <think> truncation false-negative (see VALIDATION.md)
+
+storage:
+  flat_file_dir: "./results"
+  extra_adapters: []
+
+min_free_vram_mb: 4096
+allow_unknown_vram: false
