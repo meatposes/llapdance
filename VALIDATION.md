@@ -126,16 +126,74 @@ Both engines confirmed working through the translator, end to end, for real:
 
 While adding unit tests for the two translators, `pyproject.toml`'s `python_classes = ["Test_*"]` (added two sessions ago specifically to silence a pytest warning about colliding with the `TestSuite` config model) silently excluded every class-based test file from ever being collected - `pytest -q` reported "22 passed" with no indication that 9 newly-written tests never ran at all. Caught only by noticing the collected-test count didn't match what was actually written, not by any failure output. Fixed by reverting to pytest's default `python_classes` and suppressing the specific warning via `filterwarnings` instead (`pyproject.toml`). **Breadcrumb: never narrow what a test runner is allowed to collect to silence a cosmetic warning - it will eventually eat real tests silently, and "N passed" with no failures is not the same as "everything that was written actually ran."**
 
+## Fourth session — Arcaine, OpenArc, build-from-source, OpenSearch (2026-08-01, overnight)
+
+Task: integrate two more backends (Arcaine, OpenArc), validate `source.mode: build` for real (git pull + docker build, not just `prebuilt`), validate build-version tracking, build a real OpenSearch storage adapter, and note the future MCP integration need. All done in one pass while the user slept; log kept live in `NEXT_STEPS.md` throughout, this section is the consolidated writeup.
+
+### Direct answers to questions asked at the start
+
+- **Using local git clone folders?** Yes — `~/Arcaine` (remotes: `origin`=`meatposes/Arcaine`, `upstream`=`SearchSavior/Arcaine`) and `~/OpenArc/OpenArc` (remote: `origin`=`SearchSavior/OpenArc`) are the real local clones used, same pattern as `~/qxmx` in the prior session.
+- **Tested pulling a repo?** Yes, for the first time this session — see "build-from-source" below. Used `qxmx`'s real remote (`https://tangled.org/clee.sh/qxmx`) rather than Arcaine's (Arcaine's `.devops/Dockerfile` compiles oneDNN from source, a build easily 20-40+ minutes; qxmx's build is much lighter and already had cached layers).
+
+### Arcaine
+
+Real image `arcaine-server:latest` already existed locally (plus many experimental tags), fully **env-var driven** — `server-entrypoint.sh` builds its own argv from `MODEL_PATH`, `SERVER_HOST`/`PORT`, `MAX_SEQ`, `DEFAULT_MAX_TOKENS`, plus diffusion/MoE-specific `DENOISING_STEPS`/`DEFAULT_SEED`/`LAYER_PLACEMENT`/`EXPERT_PLACEMENT` — no CLI args at all, unlike every other engine validated so far. No `/health` endpoint (confirmed 404 on a live container) — `/v1/models` is the real readiness signal, same gotcha class as qxmx/llama.cpp needing their own health-path override.
+
+Model: `/mnt/ignite/LLM/models/RedHatAI/diffusiongemma-26B-A4B-it-NVFP4` — an HF-safetensors-style directory (not a single GGUF file), a 26B-parameter MoE diffusion-decoding Gemma variant. Matches the `integration/nvfp4-27b` branch currently checked out in `~/Arcaine`. Manually verified working before writing the translator: loaded, correctly answered `12 + 30 = 42`, single render-node passthrough (same idle B70 used throughout this session). Translator: `llapdance/plugins/engine/arcaine.py` — never emits `command`, only `env`.
+
+Real run: `examples/validation-arcaine.suite.yaml` → **10/10 coherence**, benchmark completed (`avg_tokens_per_sec: 2.1`, notably lower than the `~13 tok/s` seen in the manual curl test — likely `generic-http`'s coarse "one SSE line = one token" heuristic undercounting Arcaine's particular streaming chunk shape, not a real perf regression; flagged for a closer look, not fixed tonight, coherence content itself was correct).
+
+### OpenArc
+
+Real image `openarc:dev` already existed locally. **Fundamentally different lifecycle** from every other engine validated so far: it starts with no model loaded at all (`openarc serve start`, no model args), and a model only becomes servable via a *separate* `POST /openarc/load` call after the server is already up. Discovered live (not guessed): the load config's `engine` field must be `ovgenai` for `model_type: llm` — tried `optimum` first, the server told me the exact valid combinations directly in its error message.
+
+Model: `/mnt/ignite/LLM/models/OpenVINO/Phi-4-mini-instruct-int4-ov` — genuinely different format again: OpenVINO IR (`openvino_model.xml`/`.bin` + separate tokenizer/detokenizer IR files), not GGUF or HF-safetensors. Device naming is **also** its own: `GPU`/`GPU.0`/`GPU.1` — a fourth non-corresponding GPU index space, on top of the three already found (clinfo/xpumcli/SYCL-level-zero/DRM render-node — see prior session). Sidestepped rather than reconciled: with only one render node ever passed through per backend, the literal string `"GPU"` always resolves correctly regardless of what number OpenVINO would otherwise assign it.
+
+This lifecycle difference required a genuinely new harness capability that didn't exist before tonight: **`EngineInvocation.post_start_requests`** (`llapdance/plugins/base.py`) — a list of HTTP requests fired against the running backend after the health check passes but before benchmark/coherence adapters run, wired into the orchestrator (`_run_post_start_requests`, aborts the run on any non-2xx response rather than silently benchmarking a backend with no model loaded). `BackendConfig.post_start_requests` exists too, as the same raw-passthrough escape hatch every other generated field has.
+
+Real run: `examples/validation-openarc.suite.yaml` → **10/10 coherence**, `avg_tokens_per_sec: 89.9` (a 4B-parameter INT4 model, much faster than the 26-27B models tested so far — expected, not a bug).
+
+### Build-from-source, validated for real
+
+Previous sessions only ever used `source.mode: prebuilt`. Tonight: a real `git clone` of `qxmx`'s actual remote (`https://tangled.org/clee.sh/qxmx`) into a scratch path (**not** the user's live `~/qxmx` working clone — see safety fix below), a real `docker build`, a real run. `examples/validation-build-from-source.suite.yaml`.
+
+Two real things found building this out:
+
+1. **Safety gap in `local_docker.py::build()`**: the existing-clone-path branch blindly ran `git checkout <ref>` with no check for uncommitted changes. If `build.path` had pointed at a real working directory with in-progress work, this would have silently discarded or conflicted with it. Fixed: refuses with a clear error if `git status --porcelain` isn't clean. This is also why the build-from-source test cloned into a scratch path rather than reusing `~/qxmx` directly — this harness has no business mutating a live dev clone just because a suite config names it.
+2. **Build-version tracking, built and confirmed**: image tags now include the resolved commit SHA, not just the branch/ref name (`llapdance/qxmx-from-source:main-3ae4eff`) — confirmed `3ae4eff` matched `git log`'s HEAD at build time. Two builds of the same branch at different points in time are now distinguishable from the stored `image_ref` alone.
+
+Bonus: this run's coherence check scored **9/10**, not 10/10 — the model answered `12 + 12 = 24` instead of `12 + 30 = 42`. A real model arithmetic error, not a harness bug — exactly the failure class coherence-checking exists to catch, and it caught one unprompted.
+
+### OpenSearch storage adapter, built and validated for real
+
+`llapdance/plugins/storage/opensearch.py` — opt-in per SPEC.md §8 (flat-file remains the only default-on adapter). `opensearch-py` is imported *lazily inside `__init__`*, not at module level, so `load_builtin_adapters()` importing this module never requires the dependency unless a suite actually selects `adapter: opensearch` — added as an optional extra (`pip install -e ".[opensearch]"`), not a core dependency.
+
+Validated against the real local OpenSearch 3.7.0 instance (`opensearch`/`opensearch-dashboards` containers, already running). Two real bugs found doing this, neither guessed at in advance:
+
+1. **opensearch-py 3.x API signature change**: `indices.exists()`/`indices.create()` require `index=` as a keyword argument — a positional call raises `TypeError` immediately. Found by just running the code, not by reading changelogs.
+2. **Much more serious — silent precision loss on `timestamp`**: with no explicit index mapping, OpenSearch's dynamic mapping guesses a JSON float field as 32-bit `float` (Lucene's default). A Unix epoch timestamp (~1.7×10⁹ + fractional seconds) is far beyond float32's ~7-significant-digit precision — two results written 10 seconds apart both rounded to the *identical* sort key (`1785567600.0`), silently breaking delta-lookup ordering. Caught by writing two real documents and checking the returned order was wrong, not by reading OpenSearch's own docs about default type inference. Fixed with an explicit index mapping (`timestamp: double`, plus explicit `keyword` types for `run_id`/`backend_name` rather than relying on a dynamic `.keyword` sub-field existing). Re-validated after the fix: correct descending order, correct `previous_for()` results.
+
+End-to-end integration confirmed too, not just the adapter in isolation: ran a real suite (`examples/validation-opensearch.suite.yaml`, qxmx backend) with `opensearch` configured as an `extra_adapters` entry alongside the default flat-file, through the actual CLI/orchestrator, and confirmed the resulting document landed in OpenSearch (`curl`-queried it back afterward) while the flat-file copy was also written — proving storage fan-out (multiple adapters active at once, SPEC.md §8) works, not just a single adapter swapped in for another.
+
+**Security note**: the committed example suite (`validation-opensearch.suite.yaml`) uses a placeholder password (`CHANGE_ME`) rather than the real local OpenSearch admin credential — the real credential was supplied only via a `--set` CLI override at run time, never written into a file that gets committed.
+
+### MCP integration — noted, not built
+
+Added to `SPEC.md` §13 and as a code comment at the top of `llapdance/cli.py`: this suite will need an MCP server surface later so agents (not just human operators via CLI/TUI) can push test suites/runs and pull back results programmatically. Explicitly out of scope for this build pass — the orchestrator's `run_suite`/`run_backend` functions are the operations an MCP layer would wrap, so this should be a thin translation layer on top rather than a redesign when it's built.
+
 ## Updated adapter status (see README.md, now reflects reality instead of aspiration)
 
 | Adapter | Status |
 |---|---|
-| `local-docker` execution | Real, validated against two different engines (llama.cpp + qxmx) on real GPU hardware. |
-| `generic-http` benchmark | Real, validated against two different real servers — llama.cpp and qxmx both produced real TTFT/throughput numbers. |
-| `fixed-questions` coherence | Real, validated — 10/10 against two different working backends. (An earlier draft of this doc claimed it also caught a "tokenizer crash bug" — retracted, see above; that crash was my invalid test setup, not a finding.) |
-| `flat-file` storage | Real, validated — write + delta-lookup both exercised, across two backends. |
+| `local-docker` execution | Real, validated against **four** different engines (llama.cpp, qxmx, Arcaine, OpenArc) on real GPU hardware, plus a real build-from-source run. |
+| `generic-http` benchmark | Real, validated against four different real servers, all producing real TTFT/throughput numbers (though see Arcaine's throughput-undercounting note above). |
+| `fixed-questions` coherence | Real, validated — 10/10 (or a genuine 9/10 model error) across four different working backends. (An earlier draft of this doc claimed it also caught a "tokenizer crash bug" — retracted, see above; that crash was my invalid test setup, not a finding.) |
+| `flat-file` storage | Real, validated — write + delta-lookup both exercised, across all four backends. |
+| `opensearch` storage | **Built and validated.** Real write+query round-trip against a live instance, including catching and fixing a silent timestamp-precision bug (see above). Storage fan-out (flat-file + opensearch simultaneously) confirmed working through a real suite run. |
 | Intel VRAM preflight | Real, validated — `xpumcli`-backed, confirmed to actually reject an impossible VRAM requirement with a real free-memory number, not just documented as a placeholder. |
+| `source.mode: build` | **Built and validated.** Real git clone (not `prebuilt`), real docker build, real run. Found and fixed a real safety gap (uncommitted-changes check before `git checkout`) and built real build-version tracking (git SHA in image tag). |
 | `llama-benchy` benchmark | Still a stub — unrelated to this validation, no new information. |
-| SSH execution target | Not built. `RunningBackend`/`ExecutionTargetAdapter` contract exercised only locally twice; nothing contradicts it working remotely, but it's unverified. |
-| OpenSearch / embedded-DB / Prometheus storage | Not built. |
-| `params.shared` → per-engine `command`/`env` translation | **Built and validated.** `EngineTranslator` plugin kind + `llama-cpp-sycl`/`qxmx` reference implementations, both re-validated end to end against real hardware after the reasoning-flag fix. Raw `command`/`env`/`devices` passthrough remains available for anything a translator doesn't cover. |
+| SSH execution target | Not built. `RunningBackend`/`ExecutionTargetAdapter` contract exercised only locally across four engines; nothing contradicts it working remotely, but it's unverified. |
+| Embedded-DB / Prometheus storage | Not built. |
+| MCP integration | Noted in SPEC.md §13 and `cli.py` as explicit future work. Not built. |
+| `params.shared` → per-engine `command`/`env`/`devices`/`post_start_requests` translation | **Built and validated against four engines.** `EngineTranslator` plugin kind + `llama-cpp-sycl`/`qxmx`/`arcaine`/`openarc` reference implementations. `post_start_requests` (new this session) covers engines where model-loading is a separate step from container start. Raw passthrough remains available for anything a translator doesn't cover. |

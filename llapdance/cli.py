@@ -1,3 +1,13 @@
+"""CLI entrypoint.
+
+NOTE (future work, not built - see SPEC.md §13): this suite will need an
+MCP integration so agents can push test suites/runs and pull back results
+programmatically, not just human operators via this CLI/the TUI. `run()`
+below is the operation an MCP tool would wrap almost directly - keep that
+in mind if this CLI ever grows business logic that isn't also reachable
+by calling `run_suite()`/`run_backend()` directly, since an MCP layer will
+want to call the orchestrator, not shell out to this CLI.
+"""
 from __future__ import annotations
 
 import click

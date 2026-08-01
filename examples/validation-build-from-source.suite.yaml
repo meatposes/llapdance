@@ -1,0 +1,58 @@
+# Validates source.mode: build for real - fresh git clone + docker build,
+# not source.mode: prebuilt like every other validation suite so far.
+# See VALIDATION.md "build-from-source" section.
+#
+# Deliberately clones into a SCRATCH path, not the user's real ~/qxmx
+# working clone - build() now refuses to `git checkout` over a directory
+# with uncommitted changes (a real safety gap found while building this),
+# and more importantly, this harness has no business mutating a live dev
+# clone just because a suite config happens to name it.
+name: validation-build-from-source
+
+backends:
+  - name: qxmx-from-source
+    source:
+      mode: build
+      build:
+        repo: "https://tangled.org/clee.sh/qxmx"
+        ref: "main"
+        path: "/home/nullraptor/.claude/jobs/0931048d/tmp/build-test/qxmx"
+        dockerfile: "Dockerfile"
+    model: "Ternary-Bonsai-27B-Q2_0"
+    model_path: "/models/Ternary-Bonsai-27B-Q2_0.gguf"
+    engine: "qxmx"
+    port: 8080
+    volumes:
+      /mnt/ignite/LLM/huggingface/gguf/Ternary-Bonsai-27B-gguf: /models
+    params:
+      shared:
+        context_size: 4096
+    health_path: "/health"
+    startup_timeout_s: 180
+    network:
+      mode: disabled
+
+device_target:
+  mode: indices
+  indices: [3]
+
+execution_target:
+  mode: local
+
+benchmark_adapters:
+  - adapter: generic-http
+    config:
+      prompt: "In one sentence, what is a hash table?"
+      max_tokens: 64
+      num_requests: 3
+
+coherence_adapters:
+  - adapter: fixed-questions
+    config: {}
+
+storage:
+  flat_file_dir: "./results"
+  extra_adapters: []
+
+min_free_vram_mb: 4096
+allow_unknown_vram: false
