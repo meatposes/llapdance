@@ -13,7 +13,7 @@ from llapdance.config.models import (
     AdapterRef,
 )
 from llapdance.core import orchestrator
-from llapdance.core.result import BenchmarkResult, CoherenceResult, RunResult
+from llapdance.core.result import BenchmarkResult, CoherenceResult, RunResult, TelemetryResult
 from llapdance.plugins.base import (
     BenchmarkAdapter,
     CoherenceAdapter,
@@ -21,6 +21,7 @@ from llapdance.plugins.base import (
     EngineTranslator,
     ExecutionTargetAdapter,
     RunningBackend,
+    TelemetryAdapter,
 )
 from llapdance.plugins import registry
 
@@ -346,3 +347,54 @@ def test_device_target_result_includes_full_device_identity(tmp_path, monkeypatc
     assert outcome.result.device_target["devices"] == [
         {"index": 3, "vendor": "intel", "name": "Arc Pro B70", "pci_bus_id": "0000:8a:00.0", "render_node": "/dev/dri/renderD131"}
     ]
+
+
+class FakeTelemetry(TelemetryAdapter):
+    name = "fake-telemetry"
+    starts: list[Any] = []
+    stops: list[Any] = []
+
+    def __init__(self, config=None):
+        pass
+
+    def start(self, config):
+        FakeTelemetry.starts.append(config)
+        return {"marker": "handle"}
+
+    def stop(self, handle):
+        FakeTelemetry.stops.append(handle)
+        return TelemetryResult(adapter=self.name, metrics={"GPU_BUSY": 42.0})
+
+
+def test_telemetry_brackets_benchmark_and_coherence(tmp_path, monkeypatch):
+    monkeypatch.setattr(orchestrator, "_wait_until_ready", lambda *a, **k: None)
+    _register_fakes()
+    _patch_execution(monkeypatch)
+    registry.register("telemetry", FakeTelemetry.name, FakeTelemetry)
+    FakeTelemetry.starts.clear()
+    FakeTelemetry.stops.clear()
+
+    suite = _suite(tmp_path, telemetry_adapters=[AdapterRef(adapter="fake-telemetry", config={"device": 0})])
+    outcome = orchestrator.run_backend(suite, suite.backends[0])
+
+    assert FakeTelemetry.starts == [{"device": 0}]
+    assert FakeTelemetry.stops == [{"marker": "handle"}]
+    assert outcome.result.telemetry[0].metrics == {"GPU_BUSY": 42.0}
+
+
+def test_external_backend_also_runs_telemetry(tmp_path, monkeypatch):
+    _register_fakes()
+    registry.register("telemetry", FakeTelemetry.name, FakeTelemetry)
+    FakeTelemetry.starts.clear()
+    FakeTelemetry.stops.clear()
+
+    suite = _suite(
+        tmp_path,
+        backends=[
+            BackendConfig(name="ext", source=BackendSource(mode=SourceMode.external, endpoint="http://fake:8000"), model="m")
+        ],
+        telemetry_adapters=[AdapterRef(adapter="fake-telemetry", config={})],
+    )
+    outcome = orchestrator.run_backend(suite, suite.backends[0])
+    assert outcome.result.telemetry[0].metrics == {"GPU_BUSY": 42.0}
+    assert FakeTelemetry.starts and FakeTelemetry.stops

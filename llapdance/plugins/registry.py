@@ -5,7 +5,14 @@ from __future__ import annotations
 
 from typing import Type
 
-from .base import BenchmarkAdapter, CoherenceAdapter, EngineTranslator, ExecutionTargetAdapter, StorageAdapter
+from .base import (
+    BenchmarkAdapter,
+    CoherenceAdapter,
+    EngineTranslator,
+    ExecutionTargetAdapter,
+    StorageAdapter,
+    TelemetryAdapter,
+)
 
 _REGISTRIES: dict[str, dict[str, Type]] = {
     "benchmark": {},
@@ -13,6 +20,7 @@ _REGISTRIES: dict[str, dict[str, Type]] = {
     "storage": {},
     "execution": {},
     "engine": {},
+    "telemetry": {},
 }
 
 _KIND_BASE = {
@@ -21,6 +29,7 @@ _KIND_BASE = {
     "storage": StorageAdapter,
     "execution": ExecutionTargetAdapter,
     "engine": EngineTranslator,
+    "telemetry": TelemetryAdapter,
 }
 
 
@@ -50,9 +59,10 @@ def available(kind: str) -> list[str]:
 def load_builtin_adapters() -> None:
     """Import the reference adapters so they self-register. Called once at
     CLI/TUI startup; safe to call multiple times."""
-    from llapdance.plugins.benchmark import generic_http, llama_benchy  # noqa: F401
+    from llapdance.plugins.benchmark import generic_http, guidellm, llama_benchy  # noqa: F401
     from llapdance.plugins.coherence import fixed_questions  # noqa: F401
     from llapdance.plugins.storage import flat_file  # noqa: F401
     from llapdance.plugins.storage import opensearch  # noqa: F401
     from llapdance.plugins.execution import local_docker, ssh_docker  # noqa: F401
     from llapdance.plugins.engine import arcaine, llama_cpp_sycl, openarc, qxmx  # noqa: F401
+    from llapdance.plugins.telemetry import xmxmon  # noqa: F401

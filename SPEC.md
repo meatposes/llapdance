@@ -33,12 +33,12 @@ These are examples of tools that already solve a piece of this — reference poi
 
 | Tool | Status | Relevance |
 |---|---|---|
-| [guidellm](https://github.com/vllm-project/guidellm) (vLLM project) | Active, Q3 2026 roadmap (new CLI/UI, eval support) | Backend-agnostic load/perf testing against OpenAI-compatible endpoints (TTFT, ITL, throughput). |
+| [guidellm](https://github.com/vllm-project/guidellm) (vLLM project) | Active, Q3 2026 roadmap (new CLI/UI, eval support) | Backend-agnostic load/perf testing against OpenAI-compatible endpoints (TTFT, ITL, throughput). Tried integrating for real: its `synthetic_text` data source always resolves a tokenizer via `AutoTokenizer.from_pretrained(model_name)` with no override, which fails against any served model name that isn't a real HF Hub repo id — true of most of what this harness tests (custom quants, local builds, proxy-aliased names). Shipped as a documented stub, same pattern as llama-benchy, not a working adapter. |
 | genai-perf (NVIDIA/Triton) | **Deprecated** — NVIDIA directs users to **AIPerf** | Don't build against genai-perf; AIPerf is the live successor if an NVIDIA-ecosystem workflow needs it. |
 | [promptfoo](https://github.com/promptfoo) | Active, MIT, acquired by OpenAI Mar 2026 | Its `providers` + `assertions` YAML shape is solid prior art for adapter/coherence config schema — borrow the shape, not the dependency (corp-owned project, direction risk). |
 | [PinBench](https://github.com/ShadyHippo/PinBench) | Confirmed real, checked 2026-08-01 | Structured-output/instruction-compliance benchmark, fixed case set, hits OpenAI-compatible/vLLM endpoints. Fits the coherence/quality slot, not the perf slot. |
 | `llama-benchy` | In active local use | Perf/throughput benchmark tool — one pluggable option, not the built-in default. |
-| `xmxmon` | In active local use | Telemetry/monitoring tool — one pluggable option for the telemetry slot. |
+| `xmxmon` | In active local use | Telemetry/monitoring tool — **the reference telemetry adapter, built and validated** (see §5). Real GPU hardware-counter daemon; its capture-to-file endpoint isn't consumed (samples only ever hit a file inside its own container, never the API) — the adapter uses its rolling-window snapshot endpoint instead. |
 
 None of these do the full stack this spec covers (container lifecycle + hardware-aware preflight + pluggable benchmark/coherence/telemetry + pluggable storage + remote execution + web/TUI). That gap is real; building it is not wasted motion.
 
@@ -59,6 +59,8 @@ backend:
       build_args: {...}
     prebuilt:
       image: <image ref>          # only if mode: prebuilt
+    external:
+      endpoint: <base url>        # only if mode: external - already running, no lifecycle at all
   model:
     ref: <model id/path/url>
   params:
@@ -70,41 +72,48 @@ backend:
 Requirements:
 - The harness must support testing **a single backend config** or **multiple backend configs** in one invocation.
 - Any test run must be able to **pull prior result(s)** for the same or a related backend config and show a **delta** (perf and coherence), regardless of which storage adapter is active (works even flat-file-only).
-- Build-vs-prebuilt is a per-backend-config choice, not a global mode.
+- Build-vs-prebuilt-vs-external is a per-backend-config choice, not a global mode. `external` (built and validated) means "already running, no lifecycle of the harness's own at all" — no build/start/stop, and §7's hardware-preflight requirements below do not apply, since there is no container of the harness's own to preflight.
 
 ## 5. Architecture — plugin contracts, not hardcoded tools
 
+Six plugin kinds (revised from the original four-box sketch once telemetry
+was actually integrated and turned out not to behave like a benchmark
+adapter at all — see below):
+
 ```
-┌───────────────────────────────────────────────────┐
-│                 Web UI  /  TUI                      │
-├───────────────────────────────────────────────────┤
-│                 Orchestrator Core                    │
-│  - backend-config lifecycle (build/start/stop)        │
-│  - sweep / test-suite runner                          │
-│  - hardware probing & preflight                       │
-│  - image catalog & labeling                           │
-│  - result delta lookup                                │
-├───────────┬───────────┬───────────┬─────────────────┤
-│ Execution │ Telemetry/│ Coherence/│  Storage          │
-│  Target   │ Benchmark │  Quality  │  Adapter(s)       │
-│  Adapter  │  Adapter  │  Adapter  │  (0+ active)      │
-│ (local /  │ (plugin:  │ (plugin:  │ (plugin: flat /   │
-│  remote   │ llama-    │ fixed-Q/  │  embedded-db /    │
-│  via SSH) │ benchy/   │ PinBench/ │  opensearch/      │
-│           │ guidellm/ │ custom)   │  prometheus/      │
-│           │ xmxmon/   │           │  custom)          │
-│           │ custom)   │           │                   │
-└───────────┴───────────┴───────────┴─────────────────┘
-                    │
-              LLM-judge utility
-        (generic OpenAI-compatible client;
-         used only for coherence-judge fallback
-         and cross-run analysis summaries)
+┌───────────────────────────────────────────────────────────────┐
+│                       Web UI  /  TUI  /  MCP server              │
+├───────────────────────────────────────────────────────────────┤
+│                       Orchestrator Core                          │
+│  - backend-config lifecycle (build/start/stop, or external)        │
+│  - sweep / test-suite runner                                       │
+│  - hardware probing & preflight (skipped for external backends)     │
+│  - image catalog & labeling                                         │
+│  - result delta lookup                                              │
+├──────────┬──────────┬──────────┬──────────┬──────────┬───────────┤
+│Execution │  Engine  │Benchmark │Coherence │Telemetry │  Storage    │
+│ Target   │Translator│ Adapter  │ Adapter  │ Adapter  │ Adapter(s)  │
+│ Adapter  │ (plugin: │ (plugin: │ (plugin: │ (plugin: │ (0+ active) │
+│(local /  │per-engine│ llama-   │ fixed-Q/ │ xmxmon/  │(plugin:flat/│
+│ remote   │ command/ │ benchy/  │ PinBench/│ custom - │embedded-db/ │
+│ via SSH) │env/device│ guidellm/│ custom)  │ brackets │ opensearch/ │
+│          │generator)│ custom)  │          │ a run,   │ prometheus/ │
+│          │          │          │          │ doesn't  │ custom)     │
+│          │          │          │          │ hit the  │             │
+│          │          │          │          │ endpoint)│             │
+└──────────┴──────────┴──────────┴──────────┴──────────┴───────────┘
+                              │
+                        LLM-judge utility
+                (generic OpenAI-compatible client;
+                 used only for coherence-judge fallback
+                 and cross-run analysis summaries)
 ```
 
-- **Execution target adapter**: where containers actually run. Options: local docker socket, or a remote host reachable over SSH (key-based auth). This makes "test on a different machine" a config change, not a redeploy. Same backend-config definitions apply regardless of target.
-- **Telemetry/Benchmark adapter**: plugin contract — "run this measurement against this endpoint with this config, return normalized metrics." llama-benchy, guidellm, xmxmon are reference implementations; a user's own tool is a first-class option, not a fallback.
-- **Coherence/Quality adapter**: same plugin contract, for correctness/output-quality checks rather than perf. Fixed-question-set-with-LLM-judge-fallback and PinBench-style structured-output grading are both reference implementations.
+- **Execution target adapter**: where containers actually run. Options: local docker socket, or a remote host reachable over SSH (key-based auth). This makes "test on a different machine" a config change, not a redeploy. Same backend-config definitions apply regardless of target. Does not apply to `source.mode: external` backends (§4) — nothing of the harness's own runs there.
+- **Engine translator**: the per-engine "wrapper" the original spec envisioned (§4's `params.shared` → concrete invocation) — a distinct plugin kind, not folded into the execution target. Generates `command`/`env`/`devices` from normalized params + the resolved GPU device; raw passthrough on the backend config itself remains the escape hatch for anything a translator doesn't cover.
+- **Benchmark adapter**: plugin contract — "run this measurement against this endpoint with this config, return normalized metrics." llama-benchy, guidellm, are reference implementations (perf/throughput specifically); a user's own tool is a first-class option, not a fallback.
+- **Coherence adapter**: same plugin contract shape, for correctness/output-quality checks rather than perf. Fixed-question-set-with-LLM-judge-fallback and PinBench-style structured-output grading are both reference implementations.
+- **Telemetry adapter**: a genuinely different contract from benchmark, not a variant of it — it brackets `start()`/`stop()` around whatever benchmark/coherence adapters run, watching hardware (GPU utilization, power, memory bandwidth) rather than making requests against the endpoint itself. xmxmon is the reference implementation. The original architecture sketch folded this into "Telemetry/Benchmark" as one combined slot; that turned out to be wrong once a real telemetry tool was integrated, hence the split.
 - **Storage adapter(s)**: see §8 — zero or more active at once, all opt-in beyond flat-file.
 - **LLM-judge utility**: a thin client against *any* endpoint that satisfies the OpenAI-compatible contract. The spec does not name or assume a particular backend project for this — that's private config on whoever deploys the harness.
 
@@ -124,7 +133,7 @@ No hardware topology is assumed. At startup (and on demand), the harness probes 
 Requirements:
 - **Never target an integrated GPU.** This is enforced by classification during probing (integrated vs. discrete), not by a hardcoded device list — so it holds true regardless of which machine the harness runs on.
 - GPU target is a **test parameter**, settable per backend-config or per test suite (§9) — single GPU, multiple GPUs, or "all discovered discrete GPUs." Nothing is hardcoded to a particular device.
-- **VRAM preflight is mandatory** before any bench/coherence run starts: confirm the targeted device(s) have free memory headroom before load is placed on them. Mechanism must be pluggable per vendor (different vendors expose this differently); if no mechanism is available for a given vendor/device, the harness must fail closed (refuse to run) rather than proceed blind — repeatedly running an inference workload against an already-saturated card has caused hangs in practice.
+- **VRAM preflight is mandatory** before any bench/coherence run starts *for backends the harness itself builds/starts* (`source.mode: build` or `prebuilt`, §4): confirm the targeted device(s) have free memory headroom before load is placed on them. Mechanism must be pluggable per vendor (different vendors expose this differently); if no mechanism is available for a given vendor/device, the harness must fail closed (refuse to run) rather than proceed blind — repeatedly running an inference workload against an already-saturated card has caused hangs in practice. Does not apply to `source.mode: external` backends — there is no container of the harness's own to preflight; the harness manages none of that GPU's allocation.
 - Device pinning mechanism (e.g. environment variables, driver-specific selectors, `--gpus` equivalents) is chosen per vendor at runtime based on what the probed device requires — not fixed to one vendor's convention.
 - Architecture must support GPUs changing over time (added, removed, swapped, different vendor) without editing core code — only the config/probe layer should notice the difference.
 - Architecture must support a remote execution target having entirely different hardware than the local machine — probing happens against whichever execution target is active (§5).
@@ -180,7 +189,7 @@ Granularity:
 
 - **Web UI**: browse image catalog, build/edit test suites, trigger sweeps, view comparison graphs (when a graphing-capable storage adapter is enabled), review coherence results, view deltas against prior runs.
 - **TUI**: same core operations (spin up/down, run adapters, trigger suite) for terminal-only use; graphing views are not required to be duplicated in TUI.
-- **MCP integration (future, not built)**: this suite will need an MCP server surface so agents (not just human operators via web/TUI) can push new test suites/runs and pull back results programmatically. Noted here deliberately early — the orchestrator core (§5) and CLI already expose the operations an MCP server would wrap (`run_suite`/`run_backend`, adapter registry, storage query), so this should be a thin translation layer on top rather than a redesign, but it is explicitly out of scope for this build pass.
+- **MCP integration — built and validated.** `llapdance/mcp/server.py`, 5 tools (`list_adapters`, `list_suites`, `get_suite`, `run_suite`, `get_results`), all calling straight into the same orchestrator functions the CLI uses. Validated with a real stdio client (the official `mcp` SDK), including a full `run_suite` execution pulled back afterward via `get_results`. Real gotcha for anyone building the next MCP tool: list-returning tools' results land in `structured_content["result"]`, not as JSON text in `content[0]`.
 
 ## 14. Out of scope for v1
 
@@ -191,9 +200,11 @@ Granularity:
 ## 15. Open decisions blocking full build-readiness
 
 1. Embedded lightweight DB choice for the optional local-DB storage adapter (e.g. SQLite vs. an alternative) — needs a decision before that adapter is built.
-2. Exact VRAM-preflight mechanism per GPU vendor (what's available without extra installs vs. what requires installing vendor tooling) — needs to be resolved per vendor as each is brought online, starting with whichever vendor is used for initial validation.
-3. Remote execution target auth/config shape (SSH key path, host inventory format, per-host hardware caching vs. re-probe-every-run) — needs a decision before the remote execution-target adapter is built.
+2. ~~Exact VRAM-preflight mechanism per GPU vendor~~ — resolved for Intel (`xpumcli` → `clinfo` → `lspci` tiers, built and validated) and NVIDIA (`nvidia-smi`). AMD still open.
+3. ~~Remote execution target auth/config shape~~ — resolved and built (`ssh-docker` adapter, explicit identity-file path, no reliance on `~/.ssh/config` or agent state). `source.mode: build` is not yet supported over that adapter, only `prebuilt`.
 4. Exact plugin interface (function signatures / IPC boundary) for third-party telemetry, coherence, and storage adapters — needs a decision before the plugin contract can be documented for outside contributors.
+5. **Sweep/parameter matrix automation (§10) is not built** — every comparison run so far has been a hand-authored separate suite file per variant, not an automated matrix generator. See `SPEC_REVIEW.md` for the full assessment; this is currently the most significant gap between the spec's own stated intent and what exists.
+6. **Image catalog & cleanup (§12) is not built at all** — zero code exists for this, despite it being motivated directly by real image sprawl already documented in §16. `RunResult` already carries the `image_ref`/build-version-tracked metadata §12 needs; nothing consumes it into a catalog view yet.
 
 ## 16. Reference deployment (example only — not part of the spec)
 

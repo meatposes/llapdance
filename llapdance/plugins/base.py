@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from llapdance.core.probe import DeviceInfo
-from llapdance.core.result import BenchmarkResult, CoherenceResult, RunResult
+from llapdance.core.result import BenchmarkResult, CoherenceResult, RunResult, TelemetryResult
 
 
 class RunningBackend(ABC):
@@ -68,6 +68,31 @@ class CoherenceAdapter(ABC):
 
     @abstractmethod
     def run(self, endpoint: str, config: dict[str, Any]) -> CoherenceResult:
+        ...
+
+
+class TelemetryAdapter(ABC):
+    """GPU/hardware telemetry captured alongside a benchmark/coherence run -
+    a third concern distinct from throughput (BenchmarkAdapter) and output
+    correctness (CoherenceAdapter): what the hardware was actually doing
+    (utilization, power, memory bandwidth) while producing those numbers.
+    Reference impl: xmxmon, validated against a real running instance.
+
+    Brackets around the run rather than hitting the endpoint itself:
+    `start()` is called before benchmark/coherence adapters run, `stop()`
+    after, so the adapter can capture a window rather than a single point
+    sample. `start()`/`stop()` take no endpoint - telemetry adapters watch
+    hardware, not the OpenAI-compatible API surface the other two kinds do.
+    """
+
+    name: str
+
+    @abstractmethod
+    def start(self, config: dict[str, Any]) -> Any:
+        """Begin capturing; returns an opaque handle passed to stop()."""
+
+    @abstractmethod
+    def stop(self, handle: Any) -> TelemetryResult:
         ...
 
 

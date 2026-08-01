@@ -1,0 +1,59 @@
+# Validates the xmxmon TelemetryAdapter for real, bracketed around a real
+# benchmark/coherence run - see VALIDATION.md "telemetry harness" section.
+# Reuses the already-validated qxmx backend config rather than
+# re-validating an engine here.
+name: validation-telemetry
+
+backends:
+  - name: qxmx-validation
+    source:
+      mode: prebuilt
+      image: "qxmx:latest"
+    model: "Ternary-Bonsai-27B-Q2_0"
+    model_path: "/models/Ternary-Bonsai-27B-Q2_0.gguf"
+    engine: "qxmx"
+    port: 8080
+    volumes:
+      /mnt/ignite/LLM/huggingface/gguf/Ternary-Bonsai-27B-gguf: /models
+    params:
+      shared:
+        context_size: 4096
+        kv_cache_quant: "q8_0"
+    health_path: "/health"
+    startup_timeout_s: 120
+    network:
+      mode: disabled
+
+device_target:
+  mode: indices
+  indices: [3]
+
+execution_target:
+  mode: local
+
+benchmark_adapters:
+  - adapter: generic-http
+    config:
+      prompt: "In one sentence, what is a hash table?"
+      max_tokens: 64
+      num_requests: 3
+
+coherence_adapters:
+  - adapter: fixed-questions
+    config: {}
+
+# xmxmon's own device numbering (confirmed via GET /now: devices 0/1/2
+# monitored on this box) - NOT resolved from device_target/DeviceInfo,
+# same as every other unreconciled GPU index space found this project.
+telemetry_adapters:
+  - adapter: xmxmon
+    config:
+      base_url: "http://localhost:9143"
+      device: 0
+
+storage:
+  flat_file_dir: "./results"
+  extra_adapters: []
+
+min_free_vram_mb: 4096
+allow_unknown_vram: false

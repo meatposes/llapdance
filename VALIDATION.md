@@ -226,6 +226,34 @@ Raised as a good idea while discussing GPU tracking: test a model that's *alread
 
 Also required adding `api_key`/`headers` support to both `generic-http` and `fixed-questions` (neither previously sent any auth header at all) — needed for the real target: the already-loaded `Ternary-Bonsai-27B-Q2_0.gguf` model on this box's GPU1, reached through `llm-proxy` (the user's own separate OpenAI-compatible aggregator project — found its config at `/mnt/ignite/LLM/llm-proxy/config.yaml`, confirmed the exact model id via its own `/v1/models` response rather than guessing the naming convention). Real run (`examples/validation-external.suite.yaml`): **10/10 coherence**, `13.3 tok/s`, confirmed zero containers created (`docker ps -a` before/after identical).
 
+## Sixth session — MCP server, telemetry harness, guidellm attempt, spec review (2026-08-01, continued)
+
+Task: build the MCP integration (SPEC.md §13, previously just a note), validate it for real, then review SPEC.md against original intent, then add more testing/telemetry harnesses.
+
+### MCP server — built and validated with a real client
+
+`llapdance/mcp/server.py`, using the `mcp` SDK (v2.0's `MCPServer`/`@server.tool()` API — the older `mcp.server.fastmcp.FastMCP` name from 1.x docs doesn't exist in this version, found by just importing and checking). Five tools, every one calling straight into the same orchestrator functions the CLI uses (`run_suite`, the plugin registry, `FlatFileStorage`) — no separate business logic, per the note that was already sitting in `cli.py` from when this was still unbuilt.
+
+Validated with the **real** official `mcp` client SDK over stdio (not a mock): connected to `llapdance mcp`, listed tools, called `list_adapters`/`list_suites`/`get_suite`, then ran a **real `run_suite` execution** against the already-loaded model through `llm-proxy` (external mode, from the prior session — chosen specifically because it's fast, no container boot needed for an MCP smoke test), got back real benchmark numbers and 10/10 coherence, then pulled the same result back via `get_results` reading flat-file storage.
+
+Real gotcha found doing this: a tool that returns `list[str]` (`list_suites`) does **not** come back as JSON text in `result.content[0].text` — the SDK wraps structured returns as `{"result": [...]}` under `result.structured_content`. Found by trying the naive `content[0].text` parse first (works fine for dict-returning tools like `list_adapters`, silently wrong shape for list-returning ones) and getting a `JSONDecodeError`. Documented in `mcp/server.py`'s test file and `SPEC.md` for whoever builds the next tool.
+
+### Telemetry harness — xmxmon, built and validated, with a real "wrong device" gotcha caught live
+
+New `TelemetryAdapter` plugin kind (`llapdance/plugins/base.py`) — deliberately separate from `BenchmarkAdapter`, not a variant of it: it brackets `start()`/`stop()` around whatever benchmark/coherence adapters run, watching hardware rather than hitting the endpoint itself. The original architecture sketch (SPEC.md §5) had folded "Telemetry/Benchmark" into one combined slot; integrating a real telemetry tool proved that wrong, so the spec diagram/text got updated to match (see `SPEC_REVIEW.md`).
+
+Reference implementation: `xmxmon` (`llapdance/plugins/telemetry/xmxmon.py`), a real GPU hardware-counter daemon already running locally. Read its actual source directly (no docs existed) to find its real API: `GET /now` (rolling-window snapshot: gauges/rates/derived metrics), `POST /capture`/`POST /capture/stop` (writes a tagged sample file **inside its own container**, returns only file metadata — never the samples — over the API). Deliberately did NOT build against the capture endpoints: reading that file would need container filesystem access this session had no access-checked reason to assume; the `/now` snapshot is a real, complete, already-computed summary and doesn't need it.
+
+Real validation (`examples/validation-telemetry.suite.yaml`, qxmx backend): ran clean, telemetry data captured and stored in `RunResult.telemetry` — **but** the numbers came back all near-zero, because xmxmon (configured to watch device `0`) and qxmx (targeting device `3`/`renderD131`, the same idle B70 used all session) were watching **different physical GPUs**. Not a bug — a concrete, live demonstration of the unreconciled-GPU-index-space problem this project has been flagging since the second session: the numbers were syntactically valid and semantically meaningless, and nothing would have caught the mismatch except knowing to check. Documented as a real risk for anyone wiring up telemetry: **the suite author is responsible for pointing the telemetry adapter's own device number at the same physical card the backend is actually using** — there's no automatic reconciliation, and there won't be until the GPU-index-space problem gets a real fix (still SPEC.md §15's open item).
+
+### guidellm — attempted for real, shipped as an honest stub
+
+Installed the real package (`pip install guidellm`, a genuine vLLM-project tool) and tried it against the already-loaded model through `llm-proxy`. Two real errors fixed along the way (`--constraint kind=max_requests` needs `count=`, not `max_requests=`; needed an explicit `--tokenizer` to avoid it defaulting to the backend's `model=` value). Hit a structural wall on the third attempt: guidellm's `synthetic_text` data source **always** resolves a tokenizer via `AutoTokenizer.from_pretrained(model_name)`, using the backend's served model name directly as an HF Hub repo id, with no field in `HuggingFaceTokenizerArgs` to override it (confirmed by reading the source, not guessing). This breaks against `llm-proxy`'s `<file>@<backend>` naming convention — and against most of what this harness actually tests, since a locally-built custom quant is essentially never a real HF Hub repo id either. Shipped as a documented `NotImplementedError` stub (`llapdance/plugins/benchmark/guidellm.py`), same honest pattern as `llama_benchy.py` — registered so a suite referencing it fails with the real explanation instead of a traceback buried in guidellm's own tokenizer code.
+
+### Spec review — see `SPEC_REVIEW.md`
+
+Full write-up in that file. Short version: portability principle (§0) is holding with no violations found across five sessions of real additions. Spec text had gone stale in three places (fixed in this pass): the §5 architecture diagram still showed the old four-plugin-kind sketch with telemetry folded into benchmark; `source.mode: external` didn't exist in the spec text at all despite being real and validated; §13's MCP line still said "future, not built." More importantly: **sweep/parameter-matrix automation (§10) and image catalog/cleanup (§12) are both still completely unbuilt**, while four inference engines, two execution targets, a telemetry adapter, and MCP all exist. Recommendation: the next session should probably pivot toward those two rather than a fifth engine — the engine-integration pattern is proven four times over, but there's no way to run an actual sweep or see which of the sprawling image tags are worth keeping without hand-authoring separate files or `docker images | grep` by hand.
+
 ## Updated adapter status (see README.md, now reflects reality instead of aspiration)
 
 | Adapter | Status |
@@ -240,7 +268,11 @@ Also required adding `api_key`/`headers` support to both `generic-http` and `fix
 | `source.mode: build` | Built and validated (prior session) locally; explicitly NOT supported yet over SSH (see above). |
 | `source.mode: external` | **Built and validated.** No container lifecycle at all - benchmark/coherence adapters pointed directly at an already-running endpoint (validated via `llm-proxy`). `device_note` is the only device identity captured, explicitly and permanently unverified. |
 | GPU device identity tracking | **Built and validated.** `RunResult.device_target` now carries full `DeviceInfo` (vendor/name/pci_bus_id/render_node) plus a `verified` flag, not just a bare index. Real hostname captured for local runs too. |
-| `llama-benchy` benchmark | Still a stub — unrelated to this validation, no new information. |
+| `llama-benchy` benchmark | Still a stub — no new information. |
+| `guidellm` benchmark | **Attempted for real, shipped as a stub.** Structural limitation found (tokenizer resolution requires a real HF Hub repo id), not a guess - see above. |
+| `xmxmon` telemetry | **Built and validated.** New `telemetry` plugin kind. Real capture against a real run - also caught a real "wrong physical GPU" mismatch live (see above). |
+| MCP server | **Built and validated.** Real stdio client, all 5 tools, a genuine `run_suite` execution pulled back via `get_results`. |
 | Embedded-DB / Prometheus storage | Not built. |
-| MCP integration | Noted in SPEC.md §13 and `cli.py` as explicit future work. Not built. |
+| Sweep/parameter-matrix automation (SPEC.md §10) | **Not built** - flagged as the most significant gap in `SPEC_REVIEW.md`. |
+| Image catalog & cleanup (SPEC.md §12) | **Not built at all** - zero code exists, despite being directly motivated by real, still-growing image sprawl. |
 | `params.shared` → per-engine `command`/`env`/`devices`/`post_start_requests` translation | Built and validated against four engines (prior session). Raw passthrough remains available for anything a translator doesn't cover. |

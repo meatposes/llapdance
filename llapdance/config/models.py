@@ -198,6 +198,12 @@ class TestSuite(BaseModel):
     execution_target: ExecutionTargetConfig = Field(default_factory=ExecutionTargetConfig)
     benchmark_adapters: list[AdapterRef]
     coherence_adapters: list[AdapterRef] = Field(default_factory=list)
+    telemetry_adapters: list[AdapterRef] = Field(
+        default_factory=list,
+        description="Hardware telemetry captured alongside benchmark/coherence adapters "
+        "(GPU utilization/power/memory bandwidth - a third concern distinct from throughput "
+        "or output correctness). Optional; empty by default.",
+    )
     storage: StorageConfig
     min_free_vram_mb: float = 2048
     allow_unknown_vram: bool = False

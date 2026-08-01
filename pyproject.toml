@@ -20,6 +20,9 @@ dev = ["pytest>=8.0", "pytest-mock>=3.14"]
 # Not a core dependency; the adapter module imports it lazily so merely
 # having llapdance installed never requires it.
 opensearch = ["opensearch-py>=2.4"]
+# Only needed to run `llapdance mcp` (SPEC.md §13) - deferred-imported from
+# cli.py's mcp() command, not required for the rest of the tool.
+mcp = ["mcp>=2.0"]
 
 [project.scripts]
 llapdance = "llapdance.cli:main"
