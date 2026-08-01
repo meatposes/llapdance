@@ -1,0 +1,58 @@
+# Second real Qwen3.5-family model for cross-checkpoint validation (see
+# VALIDATION.md "Tenth session" - the first model, unsloth/Qwen3.6-27B-NVFP4,
+# found NVFP4_DPAS=1 slower AND less correct than the default). This model
+# also matches Arcaine's model_type=="qwen3_5" dispatch exactly (confirmed
+# via config.json), and ships a separate MTP head (model-mtp-bf16.safetensors)
+# unlike the unsloth checkpoint - worth checking ARCAINE_QWEN35_MTP_ACCEPTANCE
+# against later.
+name: validation-arcaine-qwen35-huihui
+
+backends:
+  - name: arcaine-qwen35-huihui
+    source:
+      mode: prebuilt
+      image: "arcaine-server:qwen35fix"   # see examples/Dockerfile.arcaine-server-rebuild
+    model: "Huihui-ThinkingCap-Qwen3.6-27B-abliterated-NVFP4"
+    model_path: "/models/huihui"   # in-container path, see volumes below
+    engine: "arcaine"
+    port: 7463
+    volumes:
+      /mnt/ignite/LLM/models/sakamakismile/Huihui-ThinkingCap-Qwen3.6-27B-abliterated-NVFP4: /models/huihui
+    params:
+      shared:
+        context_size: 4096
+      backend_specific:
+        served_model_name: "Huihui-ThinkingCap-Qwen3.6-27B-abliterated-NVFP4"
+    # GOTCHA: Arcaine's image has no /health endpoint at all (confirmed via
+    # a live container - 404). /v1/models is the real readiness signal.
+    health_path: "/v1/models"
+    startup_timeout_s: 180
+    network:
+      mode: disabled
+
+device_target:
+  mode: indices
+  indices: [3]   # same idle B70 (PCI 0000:8a:00.0) used for every backend validated so far
+
+execution_target:
+  mode: local
+
+benchmark_adapters:
+  - adapter: generic-http
+    config:
+      model: "Huihui-ThinkingCap-Qwen3.6-27B-abliterated-NVFP4"
+      prompt: "In one sentence, what is a hash table?"
+      max_tokens: 64
+      num_requests: 3
+
+coherence_adapters:
+  - adapter: fixed-questions
+    config:
+      model: "Huihui-ThinkingCap-Qwen3.6-27B-abliterated-NVFP4"
+
+storage:
+  flat_file_dir: "./results"
+  extra_adapters: []
+
+min_free_vram_mb: 4096
+allow_unknown_vram: false
