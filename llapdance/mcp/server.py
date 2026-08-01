@@ -58,9 +58,13 @@ def list_suites(directory: str = ".") -> list[str]:
 
 @server.tool()
 def describe_engine(engine_name: str) -> dict[str, Any]:
-    """Sweepable params a registered EngineTranslator declares (SPEC.md
-    §10's 'catalog of build switches to sweep') - use this to find valid
-    dotted param paths for a suite's `sweep` axes before writing one."""
+    """What's known to be sweepable for a registered EngineTranslator
+    (SPEC.md §10's 'catalog of build switches to sweep') - `params`
+    (translator-consumed, swept via params.shared/backend_specific) and
+    `env_flags` (raw engine/library env vars the translator never
+    touches, swept directly via env.<NAME> - same mechanism, different
+    config section). Use this to find valid dotted param paths for a
+    suite's `sweep` axes before writing one."""
     return registry_describe_engine(engine_name)
 
 

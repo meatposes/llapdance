@@ -57,10 +57,15 @@ def available(kind: str) -> list[str]:
 
 
 def describe_engine(name: str) -> dict:
-    """SPEC.md §10's 'catalog of build switches to sweep' - the sweepable
-    params a specific EngineTranslator declares, without instantiating it
-    (it's a class attribute)."""
-    return dict(get("engine", name).sweepable_params)
+    """SPEC.md §10's 'catalog of build switches to sweep'. Two catalogs:
+    `params` (translator-consumed params.shared/backend_specific concepts,
+    swept via that path) and `env_flags` (raw engine/library env vars the
+    translator never touches, swept directly via `env.<NAME>` - the exact
+    same generic sweep mechanism, just a different section of the
+    config). Both are class attributes, read without instantiating the
+    translator."""
+    engine = get("engine", name)
+    return {"params": dict(engine.sweepable_params), "env_flags": dict(engine.known_env_flags)}
 
 
 def load_builtin_adapters() -> None:
