@@ -49,6 +49,13 @@ def test_describe_engine_returns_known_env_flags_for_arcaine():
     # which is build-time)
     assert "DIFF_ONEDNN_SDPA" in env_flags
     assert env_flags["DIFF_PREFILL_CHUNK"]["default"] == 2048
+    # real flags for the Qwen3.5 model family (src/modeling/qwen3_5/),
+    # confirmed by reading every getenv() call site - see VALIDATION.md
+    # "Qwen3.5 sweep" section: the live A/B sweep found NVFP4_DPAS=1 is
+    # both slower and less correct than the OFF default, refuting the
+    # source's own performance claim
+    assert env_flags["ARCAINE_QWEN35_NVFP4_DPAS"]["default"] is False
+    assert env_flags["ARCAINE_QWEN35_DECODE_ATTN_CHUNK"]["default"] == 128
 
 
 def test_openarc_sweepable_params_includes_runtime_config():

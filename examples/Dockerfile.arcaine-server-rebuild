@@ -1,0 +1,55 @@
+# Reference rebuild recipe for arcaine-server, needed because the original
+# Dockerfile.server used to build the deployed `arcaine-server:latest` image
+# is NOT tracked in the Arcaine repo (confirmed: `find ~/Arcaine -iname
+# "*server-entrypoint*"` finds nothing, `git log --all -- .devops/` shows no
+# server-build history). Reconstructed by reading
+# `docker history arcaine-server:latest --no-trunc`.
+#
+# Built this to pick up a real fix found + validated this session: the
+# deployed image (built 2026-07-26 05:45 UTC) predates Arcaine commit
+# f6724df, "qwen3_5: invalidate the mixer caches when a new sequence starts"
+# (2026-07-26 18:00 UTC) - without it, the 2nd sequential request against any
+# Qwen3.5 model 500s with "Qwen3.5 KV cache position mismatch". See
+# VALIDATION.md "Qwen3.5 sweep" section.
+#
+# Needs `server-entrypoint.sh` as a second build context (it's not in the
+# repo either - extract it once from the currently deployed image):
+#   docker run --rm --entrypoint cat arcaine-server:latest \
+#     /usr/local/bin/server-entrypoint.sh > /path/to/server-entrypoint.sh
+#
+# Build (reuses arcaine:onednn313's already-built oneDNN + toolchain, so this
+# only recompiles the arcaine_server C++ target - fast, ~25s incremental):
+#   cd ~/Arcaine && DOCKER_BUILDKIT=1 docker buildx build \
+#     -f examples/Dockerfile.arcaine-server-rebuild \
+#     --build-context entry=/path/to/dir/containing/server-entrypoint.sh \
+#     -t arcaine-server:qwen35fix --load .
+FROM arcaine:onednn313
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG ARCAINE_SYCL_TARGETS=intel_gpu_bmg_g31
+
+WORKDIR /workspace
+COPY . .
+
+RUN set -eux; \
+    # ~/Arcaine/build is gitignored but NOT dockerignored (no .dockerignore
+    # exists) - a real gotcha hit this session: a stale host-side build/
+    # directory (leftover CMakeCache.txt from a previous container's
+    # different /workspace path) gets copied in by `COPY . .` and collides
+    # with a fresh `cmake -B`. Must be cleared before configuring.
+    rm -rf /workspace/build; \
+    SYCL_FLAG=""; \
+    if [ -n "${ARCAINE_SYCL_TARGETS}" ]; then \
+        SYCL_FLAG="-DARCAINE_SYCL_TARGETS=${ARCAINE_SYCL_TARGETS}"; \
+    fi; \
+    cmake -B /workspace/build -G Ninja \
+        -DCMAKE_CXX_COMPILER=icpx \
+        -DCMAKE_BUILD_TYPE=Release \
+        ${SYCL_FLAG}; \
+    cmake --build /workspace/build -j"$(nproc)" --target arcaine_server
+
+COPY --from=entry server-entrypoint.sh /usr/local/bin/server-entrypoint.sh
+RUN chmod +x /usr/local/bin/server-entrypoint.sh
+
+VOLUME [/workspace/models]
+ENTRYPOINT ["/usr/local/bin/server-entrypoint.sh"]
