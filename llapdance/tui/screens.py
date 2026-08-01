@@ -236,7 +236,7 @@ class BackendBrowserScreen(Screen):
         yield Header()
         with Vertical():
             engines = available("engine")
-            yield Select([(e, e) for e in engines], id="engine", value=engines[0] if engines else Select.BLANK)
+            yield Select([(e, e) for e in engines], id="engine", value=engines[0] if engines else Select.NULL)
             yield Static(_engine_info_text(engines[0]) if engines else "(no engines registered)", id="engine-info")
             with Horizontal():
                 yield Input(value="/mnt/ignite/LLM/models", id="scan-dirs")
@@ -254,7 +254,7 @@ class BackendBrowserScreen(Screen):
         table.cursor_type = "row"
 
     def on_select_changed(self, event: Select.Changed) -> None:
-        if event.select.id == "engine" and event.value != Select.BLANK:
+        if event.select.id == "engine" and event.value != Select.NULL:
             self.query_one("#engine-info", Static).update(_engine_info_text(event.value))
             self._refresh_table()
 
@@ -338,20 +338,20 @@ class BuildScreen(Screen):
             yield Static(f"[b]{_short_model_name(self._model.path)}[/b] ({self._model.format}, {self._model.quant_hint})")
             with Horizontal():
                 engines = self._model.compatible_engines or available("engine")
-                default_engine = self._preselected_engine if self._preselected_engine in engines else (engines[0] if engines else Select.BLANK)
+                default_engine = self._preselected_engine if self._preselected_engine in engines else (engines[0] if engines else Select.NULL)
                 yield Select([(e, e) for e in engines], id="engine", value=default_engine)
                 devices = discover_devices()
                 yield Select(
                     [(f"{d.index}: {d.name}", d.index) for d in devices],
                     id="device",
-                    value=devices[0].index if devices else Select.BLANK,
+                    value=devices[0].index if devices else Select.NULL,
                 )
             image_options = _local_image_options()
             with Horizontal():
                 yield Select(
                     image_options,
                     id="image-select",
-                    value=image_options[0][1] if image_options else Select.BLANK,
+                    value=image_options[0][1] if image_options else Select.NULL,
                     allow_blank=True,
                     prompt="local image...",
                 )
@@ -379,7 +379,7 @@ class BuildScreen(Screen):
 
     def _refresh_sweep_options(self) -> None:
         engine = self.query_one("#engine", Select).value
-        if engine == Select.BLANK:
+        if engine == Select.NULL:
             return
         info = describe_engine(engine)
         options = [(f"params.shared.{k}", f"params.shared.{k}") for k in info["params"]]
@@ -398,7 +398,7 @@ class BuildScreen(Screen):
     def on_select_changed(self, event: Select.Changed) -> None:
         # picking a real local image fills the free-text field too, so
         # action_generate() only ever needs to read one source of truth
-        if event.select.id == "image-select" and event.value != Select.BLANK:
+        if event.select.id == "image-select" and event.value != Select.NULL:
             self.query_one("#image", Input).value = str(event.value)
         elif event.select.id == "engine":
             self._refresh_sweep_options()
@@ -455,7 +455,7 @@ class BuildScreen(Screen):
                     "network": {"mode": "disabled"},
                 }
             ],
-            "device_target": {"mode": "indices", "indices": [device_index] if device_index != Select.BLANK else []},
+            "device_target": {"mode": "indices", "indices": [device_index] if device_index != Select.NULL else []},
             "execution_target": {"mode": "local"},
             "benchmark_adapters": [
                 {
@@ -474,12 +474,12 @@ class BuildScreen(Screen):
         # sweeps as real numbers, not strings that happen to look numeric.
         sweep_param = self.query_one("#sweep-param", Select).value
         sweep_values_raw = self.query_one("#sweep-values", Input).value.strip()
-        if sweep_param != Select.BLANK and sweep_values_raw:
+        if sweep_param != Select.NULL and sweep_values_raw:
             values = [_coerce_sweep_value(v.strip()) for v in sweep_values_raw.split(",") if v.strip()]
             suite_dict["backends"][0]["sweep"] = [{"param": sweep_param, "values": values}]
 
         self.query_one("#yaml-preview", TextArea).text = yaml.safe_dump(suite_dict, sort_keys=False)
-        sweep_note = f" ({len(values)} runs, sweeping {sweep_param})" if sweep_param != Select.BLANK and sweep_values_raw else ""
+        sweep_note = f" ({len(values)} runs, sweeping {sweep_param})" if sweep_param != Select.NULL and sweep_values_raw else ""
         self.query_one("#build-status", Static).update(f"Generated{sweep_note} - edit above if needed, then Run.")
 
     def action_launch(self) -> None:
