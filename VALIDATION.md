@@ -254,6 +254,36 @@ Installed the real package (`pip install guidellm`, a genuine vLLM-project tool)
 
 Full write-up in that file. Short version: portability principle (§0) is holding with no violations found across five sessions of real additions. Spec text had gone stale in three places (fixed in this pass): the §5 architecture diagram still showed the old four-plugin-kind sketch with telemetry folded into benchmark; `source.mode: external` didn't exist in the spec text at all despite being real and validated; §13's MCP line still said "future, not built." More importantly: **sweep/parameter-matrix automation (§10) and image catalog/cleanup (§12) are both still completely unbuilt**, while four inference engines, two execution targets, a telemetry adapter, and MCP all exist. Recommendation: the next session should probably pivot toward those two rather than a fifth engine — the engine-integration pattern is proven four times over, but there's no way to run an actual sweep or see which of the sprawling image tags are worth keeping without hand-authoring separate files or `docker images | grep` by hand.
 
+## Seventh session — sweep automation, image catalog, model catalog (2026-08-01, continued)
+
+Direct follow-up to `SPEC_REVIEW.md`'s top recommendation: build the two flagged gaps (sweep automation, image catalog), then extend into a new capability - a model catalog with format-based backend compatibility, plus a start on cataloging each engine's actual sweepable params.
+
+### Sweep/parameter-matrix automation — built and validated
+
+`BackendConfig.sweep: list[SweepAxis]` (`llapdance/config/models.py`) + `expand_suite_sweep()` (`llapdance/config/sweep.py`), wired into `run_suite()` only (not `load_suite()`) - `get_suite`/`list_suites` (CLI and MCP) still show the compact spec a suite author wrote; only an actual run expands it. Each axis is a dotted path into the backend's own config dict (e.g. `params.shared.context_size`) plus a list of values; multiple axes on one backend cartesian-product together. A real design bug found immediately: the first implementation required the target key to already exist in the config dict, which breaks for `params.shared`/`params.backend_specific` (open dicts where a sweep should be able to introduce a param the base config never set, not just vary an existing one) - fixed to only require *intermediate* path components to pre-exist (catches a typo'd path) while allowing the final leaf to be new.
+
+Real validation (`examples/validation-sweep.suite.yaml`): one backend, one axis (`context_size: [2048, 4096]`), ran `llapdance run` once and got **two real, automatically-generated container runs** (`qxmx-sweep--context_size_2048`, `qxmx-sweep--context_size_4096`), both 10/10 coherence, clean teardown on both, two distinct stored results - the first sweep this project has actually run, versus every prior comparison being a hand-authored separate suite file.
+
+### Engine sweepable-params catalog — built
+
+`EngineTranslator.sweepable_params` (class attribute, `llapdance/plugins/base.py`) - a structured catalog (type/default/values/maps-to) of the params each translator actually reads, populated for all four reference engines by turning their existing docstring prose into machine-readable dicts (no new research needed, the knowledge already existed from building each translator). Exposed via `llapdance describe-engine <name>` and the `describe_engine` MCP tool - answers "what can I sweep for this engine" directly, which is exactly what a suite author needs before writing `sweep` axes.
+
+### Image catalog & cleanup — built and validated against real sprawl
+
+`llapdance/core/catalog.py` + `llapdance images list/label/rm` (CLI) + `list_images`/`label_image`/`remove_image` (MCP tools). Discovered that `ExecutionTargetAdapter.list_images()` already existed on both `local-docker` and `ssh-docker` (built in the very first session, alongside `build`/`start`/`stop`) but had never been called from anywhere - the catalog just needed to consume it. Labels follow flat-file storage per SPEC.md §12's own guidance (a small `_image_labels.json` alongside a suite's results, not a new database), and results are cross-referenced by the `image_ref` every `RunResult` already carries.
+
+Real validation against the actual, still-growing local image sprawl (`qxmx:*`, `llama-cpp-*`, `llapdance/*`): ran a fresh real `qxmx` validation, listed images with `--catalog-dir results` and confirmed the run showed up cross-referenced (`runs=1`) against `qxmx:latest`, labeled it `good` with a note, confirmed the label persisted and round-tripped. Confirmed the safety behavior specifically requested by the catalog's design (refuse to remove a `good`-labeled image without `force=True`) against a disposable tag created for the test - **never touched the real sprawl** to validate deletion.
+
+### Model catalog: format detection + backend compatibility — new capability, built and validated
+
+Not originally in `SPEC.md` - added per direct request. `llapdance/core/model_catalog.py` + `llapdance models <dir>...` (CLI) + `list_models` (MCP tool). Scans directories recursively for three formats (GGUF files, OpenVINO IR directories, HF-safetensors directories) and reports a best-effort quant hint plus which registered `EngineTranslator`s could plausibly load each, based on format alone - **explicitly a could-run-on signal, never a will-run guarantee** (a corrupt file, an engine-rejected quant like llama.cpp's `f8`, or a model too large for available VRAM would all pass this check and still fail at runtime).
+
+Real layout discovered scanning this box's actual model folders, not assumed: OpenVINO IR and safetensors model roots are frequently nested under an org/contributor namespace directory (e.g. `OpenVINO/droans/qwen3.5-9B-int4-ov/`, `OpenVINO/Echo9Zulu/...`) - the same convention as the HF Hub's own `org/model` layout. Detection walks recursively and stops descending once a directory is identified as a model root, rather than assuming models sit directly under the scanned directory.
+
+Quant-hint extraction uses real structured data where available rather than guessing: HF-safetensors models' `config.json` has a real `quantization_config.format` field (confirmed: `diffusiongemma-26B-A4B-it-NVFP4` → `"nvfp4-pack-quantized"`, read directly, not inferred from the directory name); OpenVINO models' `openvino_config.json` has a real `dtype` field (confirmed: `Phi-4-mini-instruct-int4-ov` → `"int4"`). GGUF files fall back to a filename regex (no equivalent structured metadata file exists for GGUF).
+
+**Validated against ground truth**, not just structurally: scanned this box's real model directories and cross-checked the three models already validated as real backends across this project's prior sessions - `Ternary-Bonsai-27B-Q2_0.gguf` → `gguf` → `[llama-cpp-sycl, qxmx]` (matches three separate validated sessions using this exact file with these exact engines); `Phi-4-mini-instruct-int4-ov` → `openvino_ir` → `[openarc]` (matches the OpenArc validation session exactly); `diffusiongemma-26B-A4B-it-NVFP4` → `safetensors` → `[arcaine]` (matches the Arcaine validation session exactly). All three format/compatibility calls agreed with reality.
+
 ## Updated adapter status (see README.md, now reflects reality instead of aspiration)
 
 | Adapter | Status |
@@ -272,7 +302,9 @@ Full write-up in that file. Short version: portability principle (§0) is holdin
 | `guidellm` benchmark | **Attempted for real, shipped as a stub.** Structural limitation found (tokenizer resolution requires a real HF Hub repo id), not a guess - see above. |
 | `xmxmon` telemetry | **Built and validated.** New `telemetry` plugin kind. Real capture against a real run - also caught a real "wrong physical GPU" mismatch live (see above). |
 | MCP server | **Built and validated.** Real stdio client, all 5 tools, a genuine `run_suite` execution pulled back via `get_results`. |
+| Sweep/parameter-matrix automation (SPEC.md §10) | **Built and validated.** Real 2-value sweep produced 2 real container runs automatically. |
+| Engine sweepable-params catalog (SPEC.md §10) | **Built.** `describe-engine` CLI command + MCP tool, populated for all 4 reference engines. |
+| Image catalog & cleanup (SPEC.md §12) | **Built and validated** against real image sprawl, including the good-label removal safety check. |
+| Model catalog + format/backend compatibility (new, not in original spec) | **Built and validated** against ground truth - all 3 previously-validated cross-format models matched exactly. |
 | Embedded-DB / Prometheus storage | Not built. |
-| Sweep/parameter-matrix automation (SPEC.md §10) | **Not built** - flagged as the most significant gap in `SPEC_REVIEW.md`. |
-| Image catalog & cleanup (SPEC.md §12) | **Not built at all** - zero code exists, despite being directly motivated by real, still-growing image sprawl. |
 | `params.shared` → per-engine `command`/`env`/`devices`/`post_start_requests` translation | Built and validated against four engines (prior session). Raw passthrough remains available for anything a translator doesn't cover. |

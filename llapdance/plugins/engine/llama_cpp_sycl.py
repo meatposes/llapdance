@@ -52,6 +52,14 @@ _REASONING_VALUES = {"on", "off", "auto"}
 class LlamaCppSyclEngine(EngineTranslator):
     name = "llama-cpp-sycl"
 
+    sweepable_params = {
+        "context_size": {"type": "int", "default": 4096, "maps_to": "-c"},
+        "batch_size": {"type": "int", "maps_to": "-b / -ub (same value both)"},
+        "kv_cache_quant": {"type": "str", "values": ["f16", "q8_0"], "maps_to": "--cache-type-k / --cache-type-v"},
+        "parallel_slots": {"type": "int", "maps_to": "--parallel"},
+        "reasoning": {"type": "str", "values": ["on", "off", "auto"], "default": "auto", "maps_to": "LLAMA_ARG_REASONING env"},
+    }
+
     def build(self, model_path: str, params: dict[str, Any], port: int, device: DeviceInfo | None) -> EngineInvocation:
         context_size = params.get("context_size", 4096)
         batch_size = params.get("batch_size")

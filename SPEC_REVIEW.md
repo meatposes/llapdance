@@ -1,3 +1,10 @@
+**Update (same day, next session):** the two gaps this review flagged as most
+urgent — sweep automation (§10) and image catalog (§12) — are now both built
+and validated, per the user's direct follow-up request. See `VALIDATION.md`'s
+"Sweep automation, image catalog, model catalog" section. The recommendation
+below is otherwise unchanged and still applies to what's left (5th engine,
+multi-GPU expert placement, embedded-DB/Prometheus storage, web UI).
+
 # Spec review — are we proceeding correctly? (2026-08-01)
 
 Requested after building and validating the MCP integration: step back, compare

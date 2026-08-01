@@ -57,6 +57,24 @@ class BackendParams(BaseModel):
     backend_specific: dict[str, Any] = Field(default_factory=dict)
 
 
+class SweepAxis(BaseModel):
+    """One dimension of a parameter sweep (SPEC.md §10). `param` is a
+    dotted path into the backend config's own dict (e.g.
+    'params.shared.context_size') - expansion (llapdance/config/sweep.py)
+    sets that path to each value in `values` in turn, producing one
+    concrete backend config per combination (cartesian product across all
+    axes on a backend)."""
+
+    param: str
+    values: list[Any]
+
+    @model_validator(mode="after")
+    def _check_values(self) -> "SweepAxis":
+        if not self.values:
+            raise ValueError(f"sweep axis {self.param!r} needs at least one value")
+        return self
+
+
 class NetworkMode(str, Enum):
     disabled = "disabled"
     enabled = "enabled"
@@ -133,6 +151,15 @@ class BackendConfig(BaseModel):
         "source.mode='external' backends there is no container of ours to probe, so this is "
         "the only device identity captured for them; NEVER treated as verified the way a "
         "probed DeviceInfo is (see RunResult.device_target's 'verified' flag).",
+    )
+    sweep: list[SweepAxis] = Field(
+        default_factory=list,
+        description="Parameter sweep axes (SPEC.md §10). If set, this ONE backend config "
+        "expands into the cartesian product of every axis's values at run_suite time "
+        "(llapdance/config/sweep.py) - each combination becomes its own concrete backend "
+        "run with a distinguishing name, not a single averaged/repeated run. Empty by "
+        "default: a backend with no sweep runs exactly once, unchanged from before this "
+        "existed.",
     )
 
 

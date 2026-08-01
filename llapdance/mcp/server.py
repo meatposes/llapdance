@@ -17,10 +17,22 @@ from typing import Any
 from mcp.server.mcpserver import MCPServer
 
 from llapdance.config.loader import load_suite
+from llapdance.core.catalog import LabeledImageRemovalError
+from llapdance.core.catalog import label_image as catalog_label_image
+from llapdance.core.catalog import list_images as catalog_list_images
+from llapdance.core.catalog import remove_image as catalog_remove_image
+from llapdance.core.model_catalog import scan_models
 from llapdance.core.orchestrator import run_suite as orchestrator_run_suite
 from llapdance.core.result import RunResult
-from llapdance.plugins.registry import available, load_builtin_adapters
+from llapdance.plugins import registry
+from llapdance.plugins.registry import available, describe_engine as registry_describe_engine, load_builtin_adapters
 from llapdance.plugins.storage.flat_file import FlatFileStorage
+
+
+def _execution_adapter(host: str | None, user: str | None, ssh_key_path: str | None):
+    if host:
+        return registry.get("execution", "ssh-docker")({"host": host, "user": user, "ssh_key_path": ssh_key_path})
+    return registry.get("execution", "local-docker")({})
 
 server = MCPServer(
     name="llapdance",
@@ -42,6 +54,14 @@ def list_suites(directory: str = ".") -> list[str]:
     """Find *.suite.yaml files under `directory` (non-recursive-safe glob,
     matches the TUI's own discovery pattern)."""
     return sorted(str(p) for p in Path(directory).glob("**/*.suite.yaml"))
+
+
+@server.tool()
+def describe_engine(engine_name: str) -> dict[str, Any]:
+    """Sweepable params a registered EngineTranslator declares (SPEC.md
+    §10's 'catalog of build switches to sweep') - use this to find valid
+    dotted param paths for a suite's `sweep` axes before writing one."""
+    return registry_describe_engine(engine_name)
 
 
 @server.tool()
@@ -85,6 +105,58 @@ def get_results(flat_file_dir: str, backend_name: str, limit: int = 5) -> list[d
     storage = FlatFileStorage({"flat_file_dir": flat_file_dir})
     results: list[RunResult] = storage.previous_for(backend_name, limit=limit)
     return [r.model_dump(mode="json") for r in results]
+
+
+@server.tool()
+def list_images(
+    catalog_dir: str | None = None,
+    name_filter: str | None = None,
+    host: str | None = None,
+    user: str | None = None,
+    ssh_key_path: str | None = None,
+) -> list[dict[str, Any]]:
+    """Enumerate docker images (local by default, or a remote host if
+    host/user/ssh_key_path are given), enriched with any label and stored
+    run history if `catalog_dir` (a suite's flat_file_dir) is given
+    (SPEC.md §12)."""
+    execution = _execution_adapter(host, user, ssh_key_path)
+    return catalog_list_images(execution, catalog_dir=catalog_dir, name_filter=name_filter)
+
+
+@server.tool()
+def label_image(catalog_dir: str, image_ref: str, label: str, note: str = "") -> dict[str, str]:
+    """Label an image good/bad/unknown with an optional note - labels live
+    in `catalog_dir` (a suite's flat_file_dir), SPEC.md §12."""
+    catalog_label_image(catalog_dir, image_ref, label, note)
+    return {"image_ref": image_ref, "label": label}
+
+
+@server.tool()
+def remove_image(
+    image_ref: str,
+    catalog_dir: str | None = None,
+    force: bool = False,
+    host: str | None = None,
+    user: str | None = None,
+    ssh_key_path: str | None = None,
+) -> dict[str, str]:
+    """Remove an image - refuses if labeled 'good' unless force=True."""
+    execution = _execution_adapter(host, user, ssh_key_path)
+    try:
+        catalog_remove_image(execution, image_ref, catalog_dir=catalog_dir, force=force)
+    except LabeledImageRemovalError as exc:
+        return {"error": str(exc)}
+    return {"removed": image_ref}
+
+
+@server.tool()
+def list_models(directories: list[str]) -> list[dict[str, Any]]:
+    """Scan directories for models, reporting format + quant hint + which
+    registered engines could plausibly load each (format-compatible, not
+    a guarantee it will run)."""
+    from dataclasses import asdict
+
+    return [asdict(m) for m in scan_models(directories)]
 
 
 def main() -> None:

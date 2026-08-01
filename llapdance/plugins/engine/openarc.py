@@ -67,6 +67,14 @@ from llapdance.plugins.registry import register
 class OpenArcEngine(EngineTranslator):
     name = "openarc"
 
+    sweepable_params = {
+        "model_type": {"type": "str", "default": "llm", "values": ["llm", "vlm", "whisper", "qwen3_asr", "kokoro", "emb", "rerank"], "maps_to": "/openarc/load model_type"},
+        "openarc_engine": {"type": "str", "default": "ovgenai", "values": ["ovgenai", "openvino", "optimum"], "maps_to": "/openarc/load engine", "note": "not all model_type/engine combinations are valid, see module docstring"},
+        "model_name": {"type": "str", "maps_to": "/openarc/load model_name", "note": "defaults to model_path's final path component if unset"},
+        # no context_size/batch_size/kv_cache_quant/parallel_slots/reasoning
+        # - genuinely not applicable, see module docstring
+    }
+
     def build(self, model_path: str, params: dict[str, Any], port: int, device: DeviceInfo | None) -> EngineInvocation:
         if device is None:
             raise ValueError("openarc requires a GPU device to be resolved (device: 'GPU' is hardcoded downstream)")

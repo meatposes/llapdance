@@ -165,8 +165,10 @@ Suites are how a repeatable "these backends, these models, on this GPU, with the
 
 ## 10. Sweep / parameter matrix
 
-- Sweep dimensions include backend-specific parameters (not shared across all backends) and GPU/device target(s) — device selection is itself sweepable (test the same config across multiple discovered devices).
-- Where a concept is shared across backends (context size, batch size, quant, GPU split, etc.), express it once in the normalized `params.shared` block (§4); backend-only params live in `params.backend_specific`.
+**Built and validated.** `BackendConfig.sweep` (a list of `{param, values}` axes, `llapdance/config/models.py`) expands into the cartesian product of concrete backend configs at `run_suite()` time (`llapdance/config/sweep.py`) — a real automated matrix, not a hand-authored suite file per variant (every comparison run before this was the latter). `param` is a dotted path into the backend's own config dict (e.g. `params.shared.context_size`); each combination gets a distinguishing name (`<backend>--<param>_<value>--...`) so results stay traceable per-variant. Validated live: one backend config, one axis (`context_size: [2048, 4096]`), two real container runs produced automatically, both 10/10 coherence, distinct stored results.
+
+- Sweep dimensions include backend-specific parameters (not shared across all backends) and GPU/device target(s) — device selection is itself sweepable (test the same config across multiple discovered devices). Device-target sweeping specifically is not yet built — only backend-param axes are; device sweeping would need `TestSuite`/`DeviceTarget`-level axes, not just `BackendConfig`-level ones.
+- Where a concept is shared across backends (context size, batch size, quant, GPU split, etc.), express it once in the normalized `params.shared` block (§4); backend-only params live in `params.backend_specific`. `llapdance describe-engine <name>` / the `describe_engine` MCP tool now catalog which params each registered `EngineTranslator` actually reads (SPEC.md's own "cataloging build switches to sweep") — built for all four reference engines.
 - Rebuild/reconfigure is not limited to "pull latest source and build" — the same trigger path drives sweeps and truth tables (repeated variants of a config to compare effect on speed/quality) without necessarily touching source.
 
 ## 11. Unit of work
@@ -181,9 +183,17 @@ Granularity:
 
 ## 12. Image catalog & cleanup
 
-- The harness enumerates images it has built/knows about (per backend-config), and lets a user label/identify good vs. outdated/failed builds, and clean up the latter.
-- Every stored result retains enough metadata (image tag/digest, full param set) to trace a result back to the exact image that produced it — this is what makes "which build was actually good, and with what settings" answerable later, this is expected to get be a common problem as the number of experimental builds under test grows over time.
-- Labeling mechanism should follow whatever storage adapter(s) are active: if only flat-file is enabled, labels live in flat metadata; if a DB/search adapter is enabled, it can be the queryable source of truth; a lightweight docker-image-label mirror is optional convenience, not required.
+**Built and validated.** `llapdance/core/catalog.py` + `llapdance images list/label/rm` (CLI) + `list_images`/`label_image`/`remove_image` (MCP) — wraps `ExecutionTargetAdapter.list_images()` (already implemented by both `local-docker` and `ssh-docker`, never previously consumed anywhere), enriched with any label and cross-referenced against stored `RunResult.image_ref` history.
+
+- The harness enumerates images it has built/knows about (per backend-config), and lets a user label/identify good vs. outdated/failed builds, and clean up the latter. Validated against the real, still-growing local image sprawl (`qxmx:*`, `llama-cpp-*`, `llapdance/*`) referenced in §16 — listed it, labeled a real validated image `good`, confirmed persistence, confirmed `remove_image` refuses a `good`-labeled image without `force=True` and succeeds with it (tested against a disposable tag created for the purpose, not the real sprawl).
+- Every stored result retains enough metadata (image tag/digest, full param set) to trace a result back to the exact image that produced it — this is what makes "which build was actually good, and with what settings" answerable later, this is expected to get be a common problem as the number of experimental builds under test grows over time. Confirmed working: `_index_runs_by_image()` reads exactly this metadata back out of flat-file results.
+- Labeling mechanism should follow whatever storage adapter(s) are active: if only flat-file is enabled, labels live in flat metadata; if a DB/search adapter is enabled, it can be the queryable source of truth; a lightweight docker-image-label mirror is optional convenience, not required. Built for flat-file only (a small `_image_labels.json` alongside a suite's results) — labels are not yet mirrored into OpenSearch when that adapter is active; flat-file remains the source of truth for labels regardless of what else is enabled.
+
+## 12a. Model catalog & backend compatibility (new — not originally in this spec)
+
+**Built and validated.** `llapdance/core/model_catalog.py` + `llapdance models <dir>...` (CLI) + `list_models` (MCP). Scans directories recursively for models (GGUF files, OpenVINO IR directories, HF-safetensors directories — correctly handling org/contributor-namespaced nesting, e.g. `OpenVINO/droans/qwen3.5-9B-int4-ov/`, found to be a real layout on this box, not assumed) and reports, per model: detected format, a best-effort quant hint (parsed from `config.json`'s real `quantization_config` field when present, filename/dirname regex fallback otherwise), and which registered `EngineTranslator`s could plausibly load it based on format alone.
+
+**Explicitly a could-run-on signal, never a will-run guarantee** — a corrupt file, a quant an engine's translator actually rejects (e.g. `llama-cpp-sycl`'s `f8` KV-cache rejection), or a model too large for available VRAM all pass this check and still fail at runtime; format compatibility is necessary, not sufficient. Validated against all three cross-format models already validated as real backends in prior sessions, confirming the mapping matches reality exactly: `Ternary-Bonsai-27B-Q2_0.gguf` → gguf → `[llama-cpp-sycl, qxmx]`; `Phi-4-mini-instruct-int4-ov` → openvino_ir → `[openarc]`; `diffusiongemma-26B-A4B-it-NVFP4` → safetensors → `[arcaine]`.
 
 ## 13. UI
 
@@ -203,8 +213,8 @@ Granularity:
 2. ~~Exact VRAM-preflight mechanism per GPU vendor~~ — resolved for Intel (`xpumcli` → `clinfo` → `lspci` tiers, built and validated) and NVIDIA (`nvidia-smi`). AMD still open.
 3. ~~Remote execution target auth/config shape~~ — resolved and built (`ssh-docker` adapter, explicit identity-file path, no reliance on `~/.ssh/config` or agent state). `source.mode: build` is not yet supported over that adapter, only `prebuilt`.
 4. Exact plugin interface (function signatures / IPC boundary) for third-party telemetry, coherence, and storage adapters — needs a decision before the plugin contract can be documented for outside contributors.
-5. **Sweep/parameter matrix automation (§10) is not built** — every comparison run so far has been a hand-authored separate suite file per variant, not an automated matrix generator. See `SPEC_REVIEW.md` for the full assessment; this is currently the most significant gap between the spec's own stated intent and what exists.
-6. **Image catalog & cleanup (§12) is not built at all** — zero code exists for this, despite it being motivated directly by real image sprawl already documented in §16. `RunResult` already carries the `image_ref`/build-version-tracked metadata §12 needs; nothing consumes it into a catalog view yet.
+5. ~~Sweep/parameter matrix automation (§10) is not built~~ — **resolved and built.** `BackendConfig.sweep` + `expand_suite_sweep()`, validated with a real 2-value sweep against a live engine.
+6. ~~Image catalog & cleanup (§12) is not built at all~~ — **resolved and built.** `llapdance images list/label/rm`, validated against real image sprawl.
 
 ## 16. Reference deployment (example only — not part of the spec)
 

@@ -41,6 +41,13 @@ _KV_QUANT_MAP = {"f16": "fp16", "q8_0": "q8_0", "f8": "fp8"}
 class QxmxEngine(EngineTranslator):
     name = "qxmx"
 
+    sweepable_params = {
+        "context_size": {"type": "int", "default": 4096, "maps_to": "--ctx-per-slot"},
+        "kv_cache_quant": {"type": "str", "values": ["f16", "q8_0", "f8"], "maps_to": "--ctk (spelling translated per value)"},
+        "parallel_slots": {"type": "int", "default": 1, "maps_to": "--slots"},
+        # batch_size deliberately absent - qxmx has no batching flag at all (see module docstring)
+    }
+
     def build(self, model_path: str, params: dict[str, Any], port: int, device: DeviceInfo | None) -> EngineInvocation:
         if device is None:
             raise ValueError("qxmx requires a GPU device - it has no CPU fallback (see its own README)")
