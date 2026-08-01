@@ -4,7 +4,11 @@ Live document — updated as work progresses. See VALIDATION.md for the full
 writeup and SPEC_REVIEW.md for the "are we still on track" assessment (now
 partly resolved - see its update note at the top).
 
-## Session complete (2026-08-01, continued) — 3 more catalog models swept
+## Session complete (2026-08-01, continued) — PinBench wired up for real
+
+Direct request: is PinBench (SPEC.md prior-art table) actually wired up? It wasn't, only cataloged. Built `llapdance/plugins/coherence/pinbench.py` - shells out to a user-supplied local PinBench checkout (`pinbench_dir`, external tool, not vendored), confirmed its real interface by cloning and reading `providers.py`/`runner.py`/`grader.py` rather than guessing. New `pinbench` optional dep group. Validated live twice - direct adapter call and full `llapdance run` CLI path - both against the real running `llama-cpp-bonsai` container (read-only, no lifecycle disruption). 5 new tests (subprocess mocked, no real checkout needed in CI), 113 passing total. Committed.
+
+## Prior session (2026-08-01, continued) — 3 more catalog models swept
 
 `Phi-3.5-mini-instruct-int8-ov` (clean, 10/10), `Qwen3-8B-int8-ov` (clean, 10/10, `max_tokens: 512`), `TinyLlama-1.1B-Chat-v1.0-int4-ov` (7/10 - real wrong answers from a small model: "cat" backwards -> "tas", water -> "H" not H2O, 9*9 -> "72" not 81 - a genuine capability limit, not a bug). Clean teardown confirmed, committed.
 

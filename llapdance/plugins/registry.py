@@ -72,7 +72,7 @@ def load_builtin_adapters() -> None:
     """Import the reference adapters so they self-register. Called once at
     CLI/TUI startup; safe to call multiple times."""
     from llapdance.plugins.benchmark import generic_http, guidellm, llama_benchy  # noqa: F401
-    from llapdance.plugins.coherence import fixed_questions  # noqa: F401
+    from llapdance.plugins.coherence import fixed_questions, pinbench  # noqa: F401
     from llapdance.plugins.storage import flat_file  # noqa: F401
     from llapdance.plugins.storage import opensearch  # noqa: F401
     from llapdance.plugins.execution import local_docker, ssh_docker  # noqa: F401

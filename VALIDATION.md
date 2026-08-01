@@ -470,6 +470,16 @@ Direct follow-up: sweep a few more untested catalog models.
 
 Clean teardown confirmed for all three.
 
+## Seventeenth session — PinBench wired up for real (2026-08-01, continued)
+
+Direct question: is PinBench (SPEC.md's "prior art" table, "fits the coherence/quality slot") actually wired up? It wasn't - only cataloged. Built it for real.
+
+Cloned the real repo (`github.com/ShadyHippo/PinBench`) rather than guessing its interface from the README, and read `providers.py`/`runner.py`/`grader.py` directly. Found: its `type: "vllm"` provider is, underneath, a bare `openai.OpenAI(api_key=..., base_url=...)` client (`OpenAICompatibleProvider`) - works against any OpenAI-compatible endpoint despite the name, which is exactly what every engine translator here exposes. Confirmed the real output shape (`<output_dir>/<run_id>/summary.json` + `results.json`, `run_id` a runtime timestamp not knowable in advance) by actually running it (`--mock`, then for real against a live config).
+
+**Design decision**: PinBench is a real, separately-maintained project with non-trivial domain logic (pinyin/hanzi matching, weighted structured-output grading) - reimplementing its grading natively would just be a worse copy. Built `llapdance/plugins/coherence/pinbench.py` as an adapter that shells out to a user-supplied local checkout (`pinbench_dir` config, same "external tool, not vendored" pattern as `source.mode: build`'s git-clone-by-path convention), not a vendored copy. Needs the new `pinbench` optional dependency group (`openai`, `requests` - PinBench's own imports) since the subprocess runs under this same interpreter (`python_bin` defaults to `sys.executable`).
+
+**Validated live end to end, twice**: once calling the adapter class directly, once through the full CLI (`llapdance run examples/validation-pinbench.suite.yaml --set coherence_adapters.0.config.pinbench_dir=...`) - both against the real, already-running production `llama-cpp-bonsai` container (`source.mode: external`, read-only HTTP, never touched the container's lifecycle). Real result: 2/3 passed on a 3-test filtered slice. 5 new tests (subprocess mocked with fixture output matching PinBench's real file shapes - no real PinBench checkout needed in CI) - 113 passing total.
+
 ## Updated adapter status (see README.md, now reflects reality instead of aspiration)
 
 | Adapter | Status |
