@@ -363,6 +363,12 @@ Ran `examples/validation-arcaine-qwen35.suite.yaml` (`env.ARCAINE_QWEN35_NVFP4_D
 
 Fixed an overclaim caught before this was actually run: `known_env_flags`'s note on this flag briefly said "validated live: the comment was correct" before the sweep had executed — corrected to state the hypothesis neutrally, now updated again to record the real (opposite) result.
 
+### Second Qwen3.5 model confirmed — cross-checkpoint validation
+
+Direct follow-up: find a different Arcaine-compatible model to test. Cross-referenced every local `config.json`'s `model_type` field against Arcaine's dispatch strings (`for f in $(find /mnt/ignite/LLM/models -maxdepth 3 -iname config.json); do ...`). Found `sakamakismile/Huihui-ThinkingCap-Qwen3.6-27B-abliterated-NVFP4` — `model_type: "qwen3_5"`, exact match, 20GB `nvfp4-pack-quantized` safetensors, plus a separate `model-mtp-bf16.safetensors` MTP head (the first model, unsloth's, has no such file — a real difference worth testing `ARCAINE_QWEN35_MTP_ACCEPTANCE` against later). Also confirmed (again) that `AEON-7/Ornith-...` and `urakozz/Ornith-1.0-35B-int4-AutoRound` both report `model_type: "qwen3_5_moe"` (missing `_text`) — still flagged as likely-incompatible, still untested.
+
+**Validated live** against the already-fixed `arcaine-server:qwen35fix` image (default flags, no sweep this time): real container boot, real benchmark (8.11 tok/s, 575ms TTFT), **10/10 fixed-questions coherence** — clean pass, no KV-cache crash (confirms the image fix generalizes across checkpoints, not just the one it was validated against). Clean teardown confirmed via `docker ps -a`.
+
 ## Updated adapter status (see README.md, now reflects reality instead of aspiration)
 
 | Adapter | Status |
