@@ -298,6 +298,30 @@ Investigated the actual source rather than guessing. Found in `ggml/src/ggml-syc
 
 **Real gap this surfaced**: the `describe-engine` catalog (built last session) only ever covered translator-consumed `params.shared`/`backend_specific` concepts - it had no way to tell a suite author these raw env flags exist at all, even though they were always sweepable. Fixed: `EngineTranslator.known_env_flags` (new class attribute, same shape as `sweepable_params`), populated for `llama-cpp-sycl` with the three flags found this session (`GGML_SYCL_NO_PINNED`, `GGML_OP_OFFLOAD_MIN_BATCH`, and `GGML_SYCL_VISIBLE_DEVICES` for reference even though this translator doesn't set it). `describe_engine()`/`llapdance describe-engine`/the MCP tool now return `{"params": ..., "env_flags": ...}` instead of a flat dict. **Not populated for qxmx/Arcaine/OpenArc yet** - only llama-cpp-sycl's source was actually read this session; the other three likely have their own equivalent flags (Arcaine links oneDNN too - `CMakeLists.txt` confirms `find_package(dnnl CONFIG REQUIRED)`) but cataloging those wasn't done here, would need the same source-reading approach applied to each.
 
+## Ninth session — cataloging known flags for qxmx, Arcaine, OpenArc (2026-08-01, continued)
+
+Direct follow-up: last session only read `llama-cpp-sycl`'s source for `known_env_flags`. Do the same for the other three reference engines.
+
+### qxmx — from-scratch, no oneDNN at all
+
+Read every `getenv()` call site in `~/qxmx/src/*.cpp`. Found ~16 real flags: perf-tuning ones (`QXMX_CHUNK` default 256, `QXMX_GEMM_WGM8`/`WGN16`/`GPP`, `QXMX_GEMV_SMAX`/`TGTWGS`, `QXMX_FD`/`FD_CHUNK`, `QXMX_FOLD`, `QXMX_VEC`, `QXMX_SNAP_STRIDE`, `QXMX_FA_SPLIT`, `QXMX_FA_PHASES`) and debug-only ones (`QXMX_PROFILE`, `QXMX_DUMP_LAYERS`, `QXMX_FFN_DEBUG`, `QXMX_BATCH_FFN_ONLY`) — cataloged both, labeled which is which. Confirmed **qxmx has no oneDNN dependency at all** (no `dnnl::` usage, nothing in `meson.build`) — it's a genuinely from-scratch engine, consistent with its own README. Real gap check: none — nothing here required a code fix, just cataloging.
+
+**Validated live**: swept `env.QXMX_CHUNK` across `["128", "256"]` against the real validated qxmx backend — both runs 10/10 coherence, clean teardown, distinct results.
+
+### Arcaine — also from-scratch, but DOES link oneDNN, as a runtime toggle
+
+Read `getenv()` sites across `~/Arcaine/src/` (excluding third_party and bench-only tools). Confirmed Arcaine has its own modeling/gpu code (not vendored `ggml-sycl`) but genuinely links oneDNN (`CMakeLists.txt: find_package(dnnl CONFIG REQUIRED)`). Found the real oneDNN toggle for the validated model family (`diffusion_gemma`): **`DIFF_ONEDNN_SDPA`** — unlike llama.cpp's `GGML_SYCL_DNNL` (build-time cmake flag), this is a **runtime env var**: unset or `"off"/"0"/"false"/"no"` (any case) disables oneDNN-backed attention (the default), any other value enables it and is passed through as an implementation-variant selector (exact valid non-empty values not characterized this session — flagged honestly rather than guessed). Also cataloged `DIFF_ARENA`/`DISABLE_SCRATCH` (memory-pool allocator toggle, two env vars controlling the same thing), `DIFF_PREFILL_CHUNK` (default 2048), `DIFF_FORCE_DENOISE_STEPS`, `DIFF_HOST_SAMPLER`.
+
+**Deliberately left uncataloged and said so in code**: a separate Qwen3.5 model family (`src/modeling/qwen3_5*/`, ~15 `ARCAINE_QWEN35_*` flags) that this harness has never validated against — only `diffusion_gemma` has been tested. Also ~13 `DIFF_NVFP4_*` flags (directly relevant since the validated model IS NVFP4-quantized) and MoE-specific flags (`DIFF_MOE_STATS`, `DIFF_MOE_TAIL_CAP`) exist and were found, but not individually characterized — each would need the same context-reading treatment as `DIFF_ONEDNN_SDPA` to document honestly rather than guess at defaults/valid values, and there wasn't time to do all of them to that standard this session.
+
+### OpenArc — real gap found and fixed, not just cataloged
+
+Different shape entirely: OpenArc has no GGML/oneDNN-style env flags — its real tuning surface is the `runtime_config` dict already visible in its `/openarc/load` API schema (found two sessions ago), which gets merged straight into the OpenVINO/`ov_genai` pipeline call (confirmed by reading `src/engine/ov_genai/llm.py`: `pipeline_kwargs = {**(loader.runtime_config or {})}`) — so any real OpenVINO plugin property (`NUM_STREAMS`, `PERFORMANCE_HINT`, `INFERENCE_PRECISION_HINT`, etc.) is a legitimate sweep target.
+
+**Real gap found**: the `openarc` translator never read or forwarded `runtime_config` at all — the capability existed and was reachable through OpenArc's own API, but this harness silently dropped it, so it looked structurally sweepable (a plain dict, same as everything else) but wasn't actually reachable. This is exactly the kind of thing cataloging is supposed to catch, and it did — cataloging isn't just documentation here, it's a correctness pass over what the translators actually forward. Fixed: `OpenArcEngine.build()` now reads `params.get("runtime_config", {})` and includes it in the `/openarc/load` JSON body.
+
+**Validated live**: ran the real OpenArc suite with `params.backend_specific.runtime_config = {"PERFORMANCE_HINT": "THROUGHPUT"}` set via `--set` — model loaded successfully (OpenArc's own API would have rejected an invalid property), 10/10 coherence, real benchmark numbers (71 tok/s on the 4B int4 model). Confirms the plumbing works end-to-end against the real API, not just structurally.
+
 ## Updated adapter status (see README.md, now reflects reality instead of aspiration)
 
 | Adapter | Status |

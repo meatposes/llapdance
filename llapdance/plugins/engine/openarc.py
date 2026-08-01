@@ -40,6 +40,18 @@ OpenArc-specific params (read from the merged params dict):
     concept entirely).
   - model_name (str, default: derived from model_path's final path
     component): the public-facing name this model is loaded/served under.
+  - runtime_config (dict, default {}): raw passthrough to OpenVINO/ov_genai
+    plugin properties (e.g. NUM_STREAMS, PERFORMANCE_HINT,
+    INFERENCE_PRECISION_HINT, CACHE_DIR) - confirmed by reading OpenArc's
+    own source (src/engine/ov_genai/llm.py: `pipeline_kwargs =
+    {**(loader.runtime_config or {})}`, merged straight into the
+    LLMPipeline call) rather than guessed at. GOTCHA found cataloging
+    this: an earlier version of this translator didn't read or forward
+    `runtime_config` at all - OpenArc's real tuning surface existed and
+    was reachable through its own API, but this translator silently
+    dropped it, making it unreachable through this harness even though it
+    looked structurally sweepable. Fixed - now merged into the
+    `/openarc/load` JSON body.
 
 GPU: only one render node ever passed through (same as the other
 translators); OpenArc's own device naming ("GPU", "GPU.0", "GPU.1" - yet a
@@ -71,6 +83,13 @@ class OpenArcEngine(EngineTranslator):
         "model_type": {"type": "str", "default": "llm", "values": ["llm", "vlm", "whisper", "qwen3_asr", "kokoro", "emb", "rerank"], "maps_to": "/openarc/load model_type"},
         "openarc_engine": {"type": "str", "default": "ovgenai", "values": ["ovgenai", "openvino", "optimum"], "maps_to": "/openarc/load engine", "note": "not all model_type/engine combinations are valid, see module docstring"},
         "model_name": {"type": "str", "maps_to": "/openarc/load model_name", "note": "defaults to model_path's final path component if unset"},
+        "runtime_config": {
+            "type": "dict", "default": {},
+            "maps_to": "/openarc/load runtime_config -> raw OpenVINO/ov_genai plugin properties",
+            "note": "e.g. {'NUM_STREAMS': '2'} or {'PERFORMANCE_HINT': 'THROUGHPUT'} - sweep individual "
+            "keys via params.shared.runtime_config.<KEY> (confirmed real by reading OpenArc's source, "
+            "see module docstring; the specific property names/values are OpenVINO's own, not OpenArc's)",
+        },
         # no context_size/batch_size/kv_cache_quant/parallel_slots/reasoning
         # - genuinely not applicable, see module docstring
     }
@@ -87,6 +106,7 @@ class OpenArcEngine(EngineTranslator):
         model_name = params.get("model_name") or model_path.rstrip("/").rsplit("/", 1)[-1]
         model_type = params.get("model_type", "llm")
         openarc_engine = params.get("openarc_engine", "ovgenai")
+        runtime_config = params.get("runtime_config", {})
 
         devices = [f"{device.render_node}:{device.render_node}"]
         post_start_requests = [
@@ -99,6 +119,7 @@ class OpenArcEngine(EngineTranslator):
                     "model_type": model_type,
                     "engine": openarc_engine,
                     "device": "GPU",
+                    "runtime_config": runtime_config,
                 },
             }
         ]

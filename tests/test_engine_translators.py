@@ -124,6 +124,23 @@ class TestOpenArc:
             "model_type": "llm",
             "engine": "ovgenai",
             "device": "GPU",
+            "runtime_config": {},
+        }
+
+    def test_runtime_config_passed_through_to_openvino(self):
+        # real gap found cataloging this engine's sweepable params: an
+        # earlier version silently dropped runtime_config even though
+        # OpenArc's own source (ov_genai/llm.py) merges it straight into
+        # the LLMPipeline call - fixed, see module docstring
+        inv = OpenArcEngine().build(
+            model_path="/models/phi4-mini",
+            params={"runtime_config": {"NUM_STREAMS": "2", "PERFORMANCE_HINT": "THROUGHPUT"}},
+            port=8000,
+            device=DEVICE,
+        )
+        assert inv.post_start_requests[0]["json"]["runtime_config"] == {
+            "NUM_STREAMS": "2",
+            "PERFORMANCE_HINT": "THROUGHPUT",
         }
 
     def test_explicit_model_name_and_type_used(self):
