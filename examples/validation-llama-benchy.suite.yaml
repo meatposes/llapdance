@@ -1,0 +1,38 @@
+# Validates the llama-benchy benchmark adapter (SPEC.md, see
+# llapdance/plugins/benchmark/llama_benchy.py) - long documented as an
+# intentional stub, actually a real Flask JSON API found by reading the
+# running container's own source rather than guessing at routes.
+#
+# Targets the already-running production llama-cpp-bonsai container
+# directly (source.mode: external, same pattern as
+# validation-external.suite.yaml).
+#
+# GOTCHA (see VALIDATION.md): llama-benchy-web runs on its own docker
+# network ("ai-network", NOT host networking) - its subprocess CLI call
+# reaches `base_url` from INSIDE that container's network namespace, not
+# from wherever llapdance itself runs. `127.0.0.1:8001` inside that
+# container is itself, not the host - real requests silently failed
+# (all-null throughput fields, no error surfaced) until pointed at the
+# bridge network's gateway IP instead (`docker inspect llama-benchy-web
+# --format '{{json .NetworkSettings.Networks}}'` -> Gateway). This will be
+# a different address on a different host/setup - find it the same way.
+name: validation-llama-benchy
+
+backends:
+  - name: bonsai-llama-benchy
+    source:
+      mode: external
+      endpoint: "http://172.28.0.1:8001"   # bridge gateway - see GOTCHA above, not the same on every host
+    model: "Ternary-Bonsai-27B-Q2_0.gguf"
+    device_note: "GPU1 (this server), Ternary Bonsai already loaded - see validation-external.suite.yaml"
+
+benchmark_adapters:
+  - adapter: llama-benchy
+    config:
+      dashboard_url: "http://localhost:5059"   # llama-benchy-web's OWN endpoint, distinct from the model server above
+      model: "Ternary-Bonsai-27B-Q2_0.gguf"
+      test_group: "quick_check"   # ~3 min - baseline/shallow_context/deep_context/all_leaderboard also real, much slower
+
+storage:
+  flat_file_dir: "./results"
+  extra_adapters: []

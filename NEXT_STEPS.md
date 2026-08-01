@@ -4,7 +4,15 @@ Live document — updated as work progresses. See VALIDATION.md for the full
 writeup and SPEC_REVIEW.md for the "are we still on track" assessment (now
 partly resolved - see its update note at the top).
 
-## Session complete (2026-08-01, continued) — swept every remaining fitting model (16 total), groundwork for pruning
+## Session complete (2026-08-01, continued) — llama-benchy was never actually a stub
+
+Direct question prompted re-investigation: the long-standing "no discoverable API" conclusion was wrong - it guessed at routes instead of reading the running container's own source. Found a real, complete Flask JSON API (`/api/start`, SSE progress stream, `/api/results/.../export/json`). Rewrote `llapdance/plugins/benchmark/llama_benchy.py` as a real async start/poll/fetch adapter (needs its own `dashboard_url`, distinct from the model server `endpoint`).
+
+- [x] Found and fixed a real live-validation gotcha: `llama-benchy-web` runs on its own docker bridge network, so `base_url` must be reachable from *inside that container*, not the host - `127.0.0.1` there is itself. Bridge gateway IP worked.
+- [x] Validated live twice (direct adapter call + full CLI) against the real production `llama-cpp-bonsai` - real numbers (336.5 tok/s prefill, 17.4 tok/s generation), container confirmed undisturbed throughout.
+- [x] 4 new tests, committed.
+
+## Prior session (2026-08-01, continued) — swept every remaining fitting model (16 total), groundwork for pruning
 
 Direct request: test everything left that would fit, so a real pruning decision can follow.
 

@@ -532,6 +532,18 @@ Ran all 15 in one sequential batch - **no crashes, no infra bugs this round** (t
 
 Combined with prior sessions' confirmed-broken models (`AEON-7`/`urakozz` MoE checkpoints - genuine Arcaine engine-format mismatch; `phi-2-int4-ov` - missing chat_template crashes OpenArc's worker), the full untested-catalog sweep is now essentially complete: 16 newly tested + 10 previously tested + 3 confirmed-broken = 29 of the catalog's real models have a real, current verdict.
 
+## Twentieth session — llama-benchy was never actually a stub (2026-08-01, continued)
+
+Direct question: what about llama-benchy? Long documented (see this file's own second session) as an intentional stub: "curl against plausible routes (/api, /openapi.json) returned 404" was taken as proof the running container exposed no API. **That conclusion was wrong** - guessed at routes instead of reading the container's own source. Re-investigated properly: `docker exec llama-benchy-web grep -n '@app.route' /app/web/app.py` shows a real, complete Flask JSON API - `POST /api/start`, `GET /api/run/<id>/stream` (SSE progress), `GET /api/results/<id>/export/json`, `GET /api/runs` - all confirmed by reading `web/app.py`/`web/engine.py` directly, not guessed.
+
+Rewrote `llapdance/plugins/benchmark/llama_benchy.py` as a real adapter: `POST /api/start` with `{base_url, model, tokenizer, test_group}` (`base_url`/`model` confirmed passed straight to the real `llama-benchy` CLI's own `--base-url`/`--model` in `engine.py::_build_command()` - genuinely arbitrary OpenAI-compatible endpoint, not llama-benchy-specific), then consumes the SSE stream until `done`, then fetches the structured JSON result and aggregates `pp_throughput`/`tg_throughput`/`ttfr` means. This is the first adapter here with a genuinely async start/poll/fetch job shape, unlike every synchronous prober before it - needs its own `dashboard_url` config, distinct from `endpoint` (the model server under test).
+
+**Two real live-validation gotchas, both found by running it for real, not by guessing:**
+1. First live run returned all-null throughput metrics with no error surfaced - not a parsing bug. Read the actual result file from inside the container (`docker exec llama-benchy-web python3 -c "..."`) and confirmed every field was genuinely `null` - the underlying benchmark itself silently failed every request. Root cause: `llama-benchy-web` runs on its own docker bridge network (`ai-network`, not host networking) - the CLI subprocess resolves `base_url` from *inside that container's own network namespace*, and the suite had passed `127.0.0.1:8001` (the model server's host-published port), which inside that container is itself, not the host. `host.docker.internal` wasn't configured (`000` response); the bridge gateway IP (`docker inspect llama-benchy-web` -> `Networks.<net>.Gateway`) worked.
+2. Confirmed real, sensible numbers on the corrected run: `pp_throughput` 336.5 tok/s (prefill), `tg_throughput` 17.4 tok/s (generation) against the real production `llama-cpp-bonsai` (27B Q2 GGUF) - consistent with this model's known performance elsewhere in this project. `llama-cpp-bonsai` confirmed still healthy/undisturbed throughout (`source.mode: external`, read-only, no lifecycle touched).
+
+Validated live twice - direct adapter call and the full CLI (`llapdance run examples/validation-llama-benchy.suite.yaml`) - both against the real dashboard + real production model. 4 new tests (`httpx.MockTransport`, no real container needed in CI), all passing.
+
 ## Updated adapter status (see README.md, now reflects reality instead of aspiration)
 
 | Adapter | Status |
