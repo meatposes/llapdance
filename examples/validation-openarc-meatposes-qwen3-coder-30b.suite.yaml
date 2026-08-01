@@ -1,0 +1,52 @@
+# Untested (per `llapdance models --results-dir`) - part of the
+# remaining-catalog sweep before pruning decisions.
+name: validation-openarc-meatposes-qwen3-coder-30b
+
+backends:
+  - name: openarc-meatposes-qwen3-coder-30b
+    source:
+      mode: prebuilt
+      image: "openarc:dev"
+    model: "Qwen3-Coder-30B-A3B-Instruct-int4"
+    model_path: "/models/meatposes-qwen3-coder-30b"
+    engine: "openarc"
+    port: 8000
+    volumes:
+      /mnt/ignite/LLM/models/OpenVINO/MeatPoses/Qwen3-Coder-30B-A3B-Instruct-int4: /models/meatposes-qwen3-coder-30b
+    params:
+      backend_specific:
+        model_name: "meatposes-qwen3-coder-30b"
+        model_type: "llm"
+        openarc_engine: "ovgenai"
+    health_path: "/v1/models"
+    startup_timeout_s: 120
+    network:
+      mode: disabled
+
+device_target:
+  mode: indices
+  indices: [3]
+
+execution_target:
+  mode: local
+
+benchmark_adapters:
+  - adapter: generic-http
+    config:
+      model: "meatposes-qwen3-coder-30b"
+      prompt: "In one sentence, what is a hash table?"
+      max_tokens: 64
+      num_requests: 3
+
+coherence_adapters:
+  - adapter: fixed-questions
+    config:
+      model: "meatposes-qwen3-coder-30b"
+      max_tokens: 512   # reasoning-capable family, avoid <think> truncation false-negative
+
+storage:
+  flat_file_dir: "./results"
+  extra_adapters: []
+
+min_free_vram_mb: 4096
+allow_unknown_vram: false

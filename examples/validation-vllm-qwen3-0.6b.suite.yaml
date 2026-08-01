@@ -1,0 +1,60 @@
+# Untested (per `llapdance models --results-dir`) - dense qwen3, not
+# arcaine-compatible (model_type "qwen3", not in arcaine's allowlist), but
+# vllm has no such restriction. Lives in the stray HF-cache-shaped dir
+# nested inside /mnt/ignite/LLM/models/hub (someone's HF_HOME pointed there
+# once - see VALIDATION.md model-consolidation notes). Same relative-symlink
+# gotcha as gemma3-12b: must mount the whole models--org--name root, not
+# just snapshots/<hash>, plus the same /dev/dri + /dev/dri/by-path
+# requirements as every vllm suite (see llapdance/plugins/engine/vllm.py).
+name: validation-vllm-qwen3-0.6b
+
+backends:
+  - name: vllm-qwen3-0.6b
+    source:
+      mode: prebuilt
+      image: "intel/vllm:latest"
+    model: "Qwen3-0.6B"
+    model_path: "/models/qwen3-0.6b-cache/snapshots/c1899de289a04d12100db370d81485cdf75e47ca"
+    engine: "vllm"
+    port: 8000
+    volumes:
+      /mnt/ignite/LLM/models/hub/models--Qwen--Qwen3-0.6B: /models/qwen3-0.6b-cache
+      /dev/dri/by-path: /dev/dri/by-path
+    params:
+      shared:
+        context_size: 4096
+      backend_specific:
+        served_model_name: "Qwen3-0.6B"
+        trust_remote_code: true
+    health_path: "/health"
+    startup_timeout_s: 180
+    network:
+      mode: disabled
+
+device_target:
+  mode: indices
+  indices: [3]
+
+execution_target:
+  mode: local
+
+benchmark_adapters:
+  - adapter: generic-http
+    config:
+      model: "Qwen3-0.6B"
+      prompt: "In one sentence, what is a hash table?"
+      max_tokens: 64
+      num_requests: 3
+
+coherence_adapters:
+  - adapter: fixed-questions
+    config:
+      model: "Qwen3-0.6B"
+      max_tokens: 512   # reasoning-capable family
+
+storage:
+  flat_file_dir: "./results"
+  extra_adapters: []
+
+min_free_vram_mb: 4096
+allow_unknown_vram: false

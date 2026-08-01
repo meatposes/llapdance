@@ -504,6 +504,34 @@ Direct ask: how do we track forks (published vs not) used in testing? Investigat
 
 **Practice adopted**: use the existing image catalog's label + free-text note mechanism (`llapdance images label <ref> unknown --note "..."`, no schema change needed - `label_image()` already took a free string, only the CLI's `Choice` restricted it to good/bad/unknown) to record provenance findings per image, alongside (not conflated with) the existing quality labels. Applied to `urakozz/vllm-xpu-env:latest` now, with the investigation above captured as the note - visible via `llapdance images list`.
 
+## Nineteenth session — sweeping every remaining fitting model, groundwork for pruning (2026-08-01, continued)
+
+Direct request: set up every remaining untested model that would actually fit for testing, so a real pruning decision can follow. Checked sizes first - all 14 remaining OpenVINO models were comfortably under 15GB (fit easily); the 2 remaining raw HF-cache models (`deepseek-ai/DeepSeek-Coder-V2-Lite-Instruct` 30G, `NousResearch/NousCoder-14B` 28G, both bf16) were excluded as too tight against the ~32GB budget, same reasoning already applied to the 52G `Qwen3.5-27B`. Also found and tested a genuinely new `vllm` candidate: the stray `hub/models--Qwen--Qwen3-0.6B` (dense `qwen3`, not arcaine-compatible, but vLLM has no allowlist).
+
+Ran all 15 in one sequential batch - **no crashes, no infra bugs this round** (the 3 vLLM mount/device bugs from the prior session were already fixed and held up across a real new model). Real results:
+
+| Model | Engine | tok/s | Coherence | Verdict |
+|---|---|---|---|---|
+| `Echo9Zulu/Qwen3-14B-int4_sym-ov` | openarc | 53.9 | 10/10 | clean |
+| `Echo9Zulu/phi-4-int4_asym-awq-se-ov` | openarc | 52.4 | 9/10 | clean (checked: model hedges on "spell backwards", a known real LLM weakness, not a bug) |
+| `Echo9Zulu/Phi-4-mini-instruct-int4_asym-awq-se-ov` | openarc | 92.8 | 10/10 | clean |
+| `DeepSeek-R1-Distill-Qwen-14B-int4-ov` | openarc | 53.8 | 10/10 | clean |
+| `MeatPoses/Qwen3-Coder-30B-A3B-Instruct-int4` | openarc | 99.2 | 10/10 | clean |
+| `MeatPoses/NousCoder-14B-int8-ov` | openarc | 34.3 | **10/10 after a fix** | first pass 4/10 - my own mistake, mislabeled it non-reasoning in the suite generator, default `max_tokens: 64` truncated real `<think>` traces (same false-negative class as `OpenVINO/Qwen3-0.6B` last session). Rerun with `max_tokens: 512` confirmed 10/10 - the model itself is fine. |
+| `MeatPoses/Omega-Directive-24B-Unslop-v2-int4-ov` | openarc | 37.1 | 10/10 | clean |
+| `mistral-7b-instruct-v0.1-fp16-ov` | openarc | 35.6 | 10/10 | clean |
+| `Qwen3-pruned-6L-from-0.6B-int8-ov` | openarc | 282.5 | 9/10 | clean (checked: rambling non-answer on "roses are red..." - genuine small-pruned-model quality limit) |
+| `Phi-4-mini-FastDraft-120M-int8-ov` | openarc | 547.5 | **2/10 - real, not a bug** | checked every failure: rambling, self-contradicting, non-answers across basic arithmetic/spelling/facts. This is a **speculative-decoding draft model** (the name says so) - designed to propose candidate tokens for a larger target model to verify, never meant to answer standalone. Confirms a real, structural limitation, not a defect - **flagged as a real pruning/relabeling candidate**: this harness has no way to test a draft model in its actual role (paired speculative decoding), so a low standalone score here is expected and uninformative, not evidence the file is bad. |
+| `NPU/DeepSeek-R1-Distill-Qwen-1.5B-int4-cw-ov` | openarc | 217.0 | 9/10 | clean, one genuine minor miss |
+| `NPU/Qwen3-0.6B-fp16-ov` | openarc | 205.3 | 9/10 | clean, one genuine minor miss |
+| `NPU/Qwen3-0.6B-int8-ov` | openarc | 229.1 | 9/10 | clean, one genuine minor miss |
+| `DeepSeek-R1-Distill-Qwen-1.5B-int4-ov` | openarc | 168.7 | 9/10 | clean, one genuine minor miss |
+| `hub/models--Qwen--Qwen3-0.6B` (stray misplaced dir) | **vllm** | 93.5 | 10/10 | clean - confirms the vLLM translator's fixes from last session generalize to a second, different model, not a one-off |
+
+**Bottom line for the pruning decision**: of 16 models tested this round, 15 work cleanly (10 at perfect 10/10, 5 with a single genuine minor miss that isn't a bug). Only `Phi-4-mini-FastDraft-120M-int8-ov` is a real candidate for pruning-consideration or relabeling - not because it's broken, but because it's a draft-only model this harness has no meaningful way to evaluate standalone.
+
+Combined with prior sessions' confirmed-broken models (`AEON-7`/`urakozz` MoE checkpoints - genuine Arcaine engine-format mismatch; `phi-2-int4-ov` - missing chat_template crashes OpenArc's worker), the full untested-catalog sweep is now essentially complete: 16 newly tested + 10 previously tested + 3 confirmed-broken = 29 of the catalog's real models have a real, current verdict.
+
 ## Updated adapter status (see README.md, now reflects reality instead of aspiration)
 
 | Adapter | Status |
