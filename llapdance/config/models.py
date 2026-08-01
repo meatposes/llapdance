@@ -74,13 +74,26 @@ class BackendConfig(BaseModel):
     port: int = 8000
     network: NetworkConfig = Field(default_factory=NetworkConfig)
     env: dict[str, str] = Field(default_factory=dict)
+    engine: str | None = Field(
+        default=None,
+        description="Name of a registered EngineTranslator (e.g. 'llama-cpp-sycl', 'qxmx') "
+        "that generates command/env/devices from params.shared + model_path + the resolved "
+        "GPU device. Any of command/env/devices set explicitly below still wins over what "
+        "the translator generates for that field - this is additive convenience, not a "
+        "replacement for the raw passthrough escape hatch.",
+    )
+    model_path: str | None = Field(
+        default=None,
+        description="In-container path to the model file (e.g. '/models/foo.gguf'), used by "
+        "an EngineTranslator. `model` above remains a human-readable label for records/"
+        "storage; this is the actual path a translator needs to build a command.",
+    )
     command: list[str] = Field(
         default_factory=list,
-        description="Raw CLI args appended after the image's ENTRYPOINT (e.g. llama.cpp "
-        "server needs -m/-ngl/-dev/-c as flags, not env vars). There is no "
-        "translation yet from params.shared to a concrete command per engine - "
-        "that per-engine 'wrapper' is future work (see README breadcrumbs). "
-        "This field is the honest raw-passthrough escape hatch until then.",
+        description="Raw CLI args appended after (or replacing, if the image has no "
+        "ENTRYPOINT - check `docker inspect --format '{{.Config.Entrypoint}}'` first, see "
+        "VALIDATION.md) the image's default command. If `engine` is set, this is only needed "
+        "to override what the translator would otherwise generate.",
     )
     volumes: dict[str, str] = Field(
         default_factory=dict,

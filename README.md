@@ -4,7 +4,7 @@
 
 Orchestrates building/starting/stopping LLM inference engine containers under different configurations, runs pluggable benchmark and coherence/quality checks against them, and stores results for cross-run comparison. Every piece — which engines, which benchmark/coherence tool, where results go, which GPU, which machine it runs on — is config, not hardcoded. Full design rationale: [SPEC.md](./SPEC.md).
 
-Status: early build (v0.1) — thin vertical slice + TUI, validated end-to-end against real Intel Arc GPU hardware running two different backends (llama.cpp and a custom engine, qxmx) with the same model (2026-08-01). Not everything in SPEC.md is implemented yet; see "What's implemented" below and [VALIDATION.md](./VALIDATION.md) for the full writeup, bugs found, and breadcrumbs for building the remaining adapters.
+Status: early build (v0.1) — thin vertical slice + TUI + a real per-engine params translation layer, validated end-to-end against real Intel Arc GPU hardware running two different backends (llama.cpp and a custom engine, qxmx) with the same model (2026-08-01). Not everything in SPEC.md is implemented yet; see "What's implemented" below and [VALIDATION.md](./VALIDATION.md) for the full writeup, bugs found, and breadcrumbs for building the remaining adapters.
 
 ## Install
 
@@ -33,6 +33,7 @@ Copy `examples/example.suite.yaml` and edit it for a real backend — nothing in
   - `generic-http` benchmark adapter — TTFT/throughput prober against any OpenAI-compatible endpoint. This, not `llama-benchy`, is the one guaranteed to work out of the box (see below). **Validated with real numbers against a real llama.cpp server.**
   - `fixed-questions` coherence adapter — 10-question set, keyword match with LLM-judge fallback via a generic OpenAI-compatible client. **Validated (10/10) against a real server.**
   - `flat-file` storage adapter — the only always-on default per SPEC.md §8. **Validated**: write + prior-run delta lookup both exercised for real.
+- **Reference engine translators** (`llapdance/plugins/engine/`) — the per-engine "wrapper" the spec originally envisioned: `EngineTranslator` plugin kind, generating `command`/`env`/`devices` from `BackendConfig.engine` + `params.shared` + the resolved GPU device, instead of hand-writing raw CLI args per suite. `llama-cpp-sycl` and `qxmx` are both validated end to end against real hardware. Normalized params covered so far: `context_size`, `batch_size` (llama.cpp only), `kv_cache_quant` (`f16`/`q8_0`/`f8`, translated to each engine's own value spelling), `parallel_slots`, `reasoning` (llama.cpp only — see VALIDATION.md for a real bug this caught). Anything set explicitly in `command`/`env`/`devices` still overrides what a translator generates for that field.
 - Orchestrator core tying the above together, including GPU hardware probing (`llapdance/core/probe.py` — Intel via `xpumcli` (preferred, gives real free-VRAM + stable PCI bus id) or `clinfo` (fallback, enumeration only), plus NVIDIA via `nvidia-smi`) with a **real, validated** VRAM preflight check (confirmed to reject an actual over-budget request with a real free-memory number on Intel hardware), and a startup health-poll (`_wait_until_ready`) so benchmark/coherence adapters don't fire before the model has finished loading.
 - CLI (`llapdance run/adapters/tui`) and a Textual TUI browsing `*.suite.yaml` files in the working directory.
 
@@ -45,7 +46,7 @@ Copy `examples/example.suite.yaml` and edit it for a real backend — nothing in
 - GPU index spaces don't correspond across tools — confirmed on real hardware, not theoretical (see VALIDATION.md). `DeviceInfo.pci_bus_id` and `DeviceInfo.render_node` exist specifically to give something stable to reconcile against; `DeviceInfo.index` is only meaningful within whichever discovery source produced it.
 - No image-catalog/labeling UI yet (SPEC.md §12).
 - No web UI yet — TUI + CLI only.
-- No translation from `params.shared` (normalized cross-backend knobs) into a concrete `command`/`env` per engine yet — `BackendConfig.command`/`env` are raw passthrough today. This is the next real piece of work; see VALIDATION.md "Gaps found" for where it plugs in.
+- ~~No translation from `params.shared` into a concrete `command`/`env` per engine~~ — **built.** See "Reference engine translators" below.
 
 These are exactly the open items from SPEC.md §15, now reflected in code rather than left as prose.
 

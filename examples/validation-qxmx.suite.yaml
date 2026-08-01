@@ -2,6 +2,11 @@
 # engines by config alone - see VALIDATION.md "qxmx" section for the
 # gotchas found bringing this one up (image has no ENTRYPOINT, only CMD;
 # VRAM preflight actually runs for real this time via xpumcli).
+# Updated 2026-08-01 to use the qxmx EngineTranslator instead of raw
+# command/env/devices passthrough - the ENTRYPOINT-vs-CMD gotcha and the
+# render-node-only GPU pinning are now baked into
+# llapdance/plugins/engine/qxmx.py instead of copy-pasted into every suite
+# that wants to test qxmx.
 name: validation-qxmx
 
 backends:
@@ -10,36 +15,15 @@ backends:
       mode: prebuilt
       image: "qxmx:latest"
     model: "Ternary-Bonsai-27B-Q2_0"   # same model as the llama.cpp validation run
+    model_path: "/models/Ternary-Bonsai-27B-Q2_0.gguf"
+    engine: "qxmx"
     port: 8080
     volumes:
       /mnt/ignite/LLM/huggingface/gguf/Ternary-Bonsai-27B-gguf: /models
-    # GOTCHA: qxmx:latest has no ENTRYPOINT, only a default CMD
-    # (["./build/qxmx_serve"]) - unlike llama-cpp-bonsai (which sets
-    # ENTRYPOINT), overriding `command` here REPLACES that default
-    # entirely, so the binary name must be included as command[0]. Whether
-    # command needs the binary name depends on ENTRYPOINT vs CMD in the
-    # image - `docker inspect --format '{{.Config.Entrypoint}}'` before
-    # writing a new backend's command list.
-    command:
-      - "./build/qxmx_serve"
-      - "--host"
-      - "0.0.0.0"
-      - "--port"
-      - "8080"
-      - "--slots"
-      - "1"
-      - "--ctx-per-slot"
-      - "4096"
-      - "--ctk"
-      - "q8_0"
-      - "/models/Ternary-Bonsai-27B-Q2_0.gguf"
-    # Single render node passthrough (not the whole /dev/dri) - pins qxmx to
-    # one specific physical card. qxmx has no device-selector flag/env at
-    # all (README: "only one GPU is supported" - whichever /dev/dri node(s)
-    # are visible is the whole mechanism), so this IS qxmx's GPU pinning,
-    # not a hint alongside some other selector.
-    devices:
-      - "/dev/dri/renderD131:/dev/dri/renderD131"
+    params:
+      shared:
+        context_size: 4096
+        kv_cache_quant: "q8_0"
     health_path: "/health"
     startup_timeout_s: 120
     network:

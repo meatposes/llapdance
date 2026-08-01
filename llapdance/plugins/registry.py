@@ -5,13 +5,14 @@ from __future__ import annotations
 
 from typing import Type
 
-from .base import BenchmarkAdapter, CoherenceAdapter, ExecutionTargetAdapter, StorageAdapter
+from .base import BenchmarkAdapter, CoherenceAdapter, EngineTranslator, ExecutionTargetAdapter, StorageAdapter
 
 _REGISTRIES: dict[str, dict[str, Type]] = {
     "benchmark": {},
     "coherence": {},
     "storage": {},
     "execution": {},
+    "engine": {},
 }
 
 _KIND_BASE = {
@@ -19,6 +20,7 @@ _KIND_BASE = {
     "coherence": CoherenceAdapter,
     "storage": StorageAdapter,
     "execution": ExecutionTargetAdapter,
+    "engine": EngineTranslator,
 }
 
 
@@ -52,3 +54,4 @@ def load_builtin_adapters() -> None:
     from llapdance.plugins.coherence import fixed_questions  # noqa: F401
     from llapdance.plugins.storage import flat_file  # noqa: F401
     from llapdance.plugins.execution import local_docker  # noqa: F401
+    from llapdance.plugins.engine import llama_cpp_sycl, qxmx  # noqa: F401

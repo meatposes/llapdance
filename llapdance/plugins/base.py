@@ -3,8 +3,10 @@ ABCs; the orchestrator core never depends on a concrete adapter."""
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from typing import Any
 
+from llapdance.core.probe import DeviceInfo
 from llapdance.core.result import BenchmarkResult, CoherenceResult, RunResult
 
 
@@ -66,6 +68,46 @@ class CoherenceAdapter(ABC):
 
     @abstractmethod
     def run(self, endpoint: str, config: dict[str, Any]) -> CoherenceResult:
+        ...
+
+
+@dataclass
+class EngineInvocation:
+    """What an EngineTranslator produces - merged onto a BackendConfig's
+    raw command/env/devices, with any value the user set explicitly in
+    config taking precedence over the generated one (SPEC.md's raw
+    passthrough remains the escape hatch, this is the convenience layer
+    on top of it, not a replacement for it)."""
+
+    command: list[str] = field(default_factory=list)
+    env: dict[str, str] = field(default_factory=dict)
+    devices: list[str] = field(default_factory=list)
+
+
+class EngineTranslator(ABC):
+    """Translates SPEC.md §4's normalized `params.shared` (context_size,
+    batch_size, kv_cache_quant, parallel_slots - the set validated so far
+    against real engines, see VALIDATION.md) plus a resolved model path and
+    GPU device into a concrete container command/env/devices for one
+    specific engine. This is the per-engine 'wrapper' the original spec
+    envisioned - `BackendConfig.command`/`env`/`devices` remain valid raw
+    passthrough for anything a translator doesn't cover or gets wrong.
+
+    Reference impls: llama-cpp-sycl, qxmx (both validated against real
+    hardware - see VALIDATION.md 'params translation layer' section for
+    what does and doesn't map cleanly across the two).
+    """
+
+    name: str
+
+    @abstractmethod
+    def build(
+        self,
+        model_path: str,
+        params: dict[str, Any],
+        port: int,
+        device: DeviceInfo | None,
+    ) -> EngineInvocation:
         ...
 
 
