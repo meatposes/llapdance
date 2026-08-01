@@ -4,7 +4,16 @@ Live document — updated as work progresses. See VALIDATION.md for the full
 writeup and SPEC_REVIEW.md for the "are we still on track" assessment (now
 partly resolved - see its update note at the top).
 
-## Session complete (2026-08-01, continued) — PinBench wired up for real
+## Session complete (2026-08-01, continued) — 5th engine (vLLM), 3 real bugs found+fixed, fork-provenance practice adopted
+
+Follow-up to model-consolidation cleanup: 3 real raw HF bf16 models (deepseek_v2/gemma3/qwen3) couldn't load on any existing engine. Built `llapdance/plugins/engine/vllm.py` from the real running `vllm-urak` production container's actual `docker inspect` output, not guessed. Also added `vllm` to `model_catalog.py`'s safetensors-compatible engines list.
+
+- [x] First live validation attempt found and fixed **three real bugs** in sequence: (1) HF cache relative symlinks break if only `snapshots/<hash>` is mounted, not the whole `models--org--name` root; (2) vLLM/oneCCL needs the WHOLE `/dev/dri` directory device-passed-through, not a single render node like every other engine here; (3) `/dev/dri` alone still isn't enough - `/dev/dri/by-path` needs a separate real bind mount too (oneCCL's GPU-topology discovery). All confirmed by cross-checking the real `vllm-urak` container's actual `Devices`/`Mounts`, not guessed.
+- [x] Fourth attempt: clean pass against `gemma-3-12b-it-abliterated` using the **published** `intel/vllm:latest` image (not the unpublished fork) - 18.9 tok/s, 10/10 coherence, clean teardown.
+- [x] **Fork-provenance practice adopted**: investigated `urakozz/vllm-xpu-env`'s real build history - confirmed its main source tree is `COPY`'d from a local context (not a traceable git clone) with `GIT_REPO_CHECK=0`, unlike Arcaine's fully-reconstructable stale image. Used the existing image-catalog label+note mechanism (no schema change) to record this - `llapdance images label urakozz/vllm-xpu-env:latest unknown --note "..."`.
+- [x] 25 new tests, 118 passing, committed.
+
+## Prior session (2026-08-01, continued) — PinBench wired up for real
 
 Direct request: is PinBench (SPEC.md prior-art table) actually wired up? It wasn't, only cataloged. Built `llapdance/plugins/coherence/pinbench.py` - shells out to a user-supplied local PinBench checkout (`pinbench_dir`, external tool, not vendored), confirmed its real interface by cloning and reading `providers.py`/`runner.py`/`grader.py` rather than guessing. New `pinbench` optional dep group. Validated live twice - direct adapter call and full `llapdance run` CLI path - both against the real running `llama-cpp-bonsai` container (read-only, no lifecycle disruption). 5 new tests (subprocess mocked, no real checkout needed in CI), 113 passing total. Committed.
 

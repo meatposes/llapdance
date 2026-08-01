@@ -41,7 +41,9 @@ def test_detects_safetensors_model_and_reads_quant_format(tmp_path):
     assert len(models) == 1
     assert models[0].format == "safetensors"
     assert models[0].quant_hint == "nvfp4-pack-quantized"
-    assert models[0].compatible_engines == ["arcaine"]
+    # vllm has no model_type allowlist unlike arcaine - any HF-transformers
+    # safetensors checkpoint is a plausible fit (see model_catalog.py)
+    assert models[0].compatible_engines == ["arcaine", "vllm"]
 
 
 def test_finds_models_nested_under_an_org_namespace_directory(tmp_path):
