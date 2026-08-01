@@ -1,0 +1,53 @@
+# Third/fourth backend, validating Arcaine + OpenArc integration - see
+# VALIDATION.md "Arcaine + OpenArc" section.
+name: validation-arcaine
+
+backends:
+  - name: arcaine-validation
+    source:
+      mode: prebuilt
+      image: "arcaine-server:latest"
+    model: "diffusiongemma-26B-A4B-it-NVFP4"
+    model_path: "/models/diffusiongemma"   # in-container path, see volumes below
+    engine: "arcaine"
+    port: 7461
+    volumes:
+      /mnt/ignite/LLM/models/RedHatAI/diffusiongemma-26B-A4B-it-NVFP4: /models/diffusiongemma
+    params:
+      shared:
+        context_size: 4096
+      backend_specific:
+        served_model_name: "diffusiongemma-26B-A4B-it-NVFP4"
+    # GOTCHA: Arcaine's image has no /health endpoint at all (confirmed via
+    # a live container - 404). /v1/models is the real readiness signal.
+    health_path: "/v1/models"
+    startup_timeout_s: 180
+    network:
+      mode: disabled
+
+device_target:
+  mode: indices
+  indices: [3]   # same idle B70 (PCI 0000:8a:00.0) used for every backend validated so far
+
+execution_target:
+  mode: local
+
+benchmark_adapters:
+  - adapter: generic-http
+    config:
+      model: "diffusiongemma-26B-A4B-it-NVFP4"   # must match SERVED_MODEL_NAME above
+      prompt: "In one sentence, what is a hash table?"
+      max_tokens: 64
+      num_requests: 3
+
+coherence_adapters:
+  - adapter: fixed-questions
+    config:
+      model: "diffusiongemma-26B-A4B-it-NVFP4"
+
+storage:
+  flat_file_dir: "./results"
+  extra_adapters: []
+
+min_free_vram_mb: 4096
+allow_unknown_vram: false

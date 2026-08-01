@@ -74,7 +74,12 @@ def _apply_engine_translator(backend: BackendConfig, device: DeviceInfo | None) 
     translator = registry.get("engine", backend.engine)()
     invocation = translator.build(
         model_path=backend.model_path or "",
-        params=backend.params.shared,
+        # shared + backend_specific merged into one flat namespace for the
+        # translator - the shared/backend_specific split in config is for a
+        # suite author's own organization (which knobs are cross-backend
+        # concepts vs. this-engine-only), not something a translator needs
+        # to care about when reading its own params back out.
+        params={**backend.params.shared, **backend.params.backend_specific},
         port=backend.port,
         device=device,
     )
@@ -82,8 +87,21 @@ def _apply_engine_translator(backend: BackendConfig, device: DeviceInfo | None) 
         backend_dict["command"] = invocation.command
     if not backend_dict["devices"]:
         backend_dict["devices"] = invocation.devices
+    if not backend_dict["post_start_requests"]:
+        backend_dict["post_start_requests"] = invocation.post_start_requests
     backend_dict["env"] = {**invocation.env, **backend_dict["env"]}  # user env wins on key conflicts
     return backend_dict
+
+
+def _run_post_start_requests(endpoint: str, requests: list[dict[str, Any]]) -> None:
+    for req in requests:
+        method = req.get("method", "POST")
+        path = req["path"]
+        resp = httpx.request(method, endpoint.rstrip("/") + path, json=req.get("json"), timeout=120)
+        if resp.status_code >= 400:
+            raise RuntimeError(
+                f"post_start_request {method} {path} failed ({resp.status_code}): {resp.text[:500]}"
+            )
 
 
 def _vram_preflight(device_indices: list[int], min_free_mb: float, allow_unknown: bool) -> None:
@@ -134,6 +152,7 @@ def run_backend(suite: TestSuite, backend: BackendConfig) -> RunOutcome:
     running = execution.start(backend_dict, image_ref, device_indices)
     try:
         _wait_until_ready(running.endpoint, backend.health_path, backend.startup_timeout_s)
+        _run_post_start_requests(running.endpoint, backend_dict["post_start_requests"])
 
         benchmarks = []
         for ref in suite.benchmark_adapters:
@@ -155,6 +174,7 @@ def run_backend(suite: TestSuite, backend: BackendConfig) -> RunOutcome:
         "command": backend_dict["command"],
         "env": backend_dict["env"],
         "devices": backend_dict["devices"],
+        "post_start_requests": backend_dict["post_start_requests"],
     }
     result = RunResult(
         backend_name=backend.name,

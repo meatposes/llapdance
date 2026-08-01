@@ -1,7 +1,9 @@
 import pytest
 
 from llapdance.core.probe import DeviceInfo
+from llapdance.plugins.engine.arcaine import ArcaineEngine
 from llapdance.plugins.engine.llama_cpp_sycl import LlamaCppSyclEngine
+from llapdance.plugins.engine.openarc import OpenArcEngine
 from llapdance.plugins.engine.qxmx import QxmxEngine
 
 DEVICE = DeviceInfo(index=3, vendor="intel", name="Arc B70", integrated=False, pci_bus_id="0000:8a:00.0", render_node="/dev/dri/renderD131")
@@ -79,3 +81,67 @@ class TestQxmx:
     def test_device_without_render_node_raises(self):
         with pytest.raises(ValueError, match="render_node"):
             QxmxEngine().build(model_path="/m.gguf", params={}, port=8080, device=DEVICE_NO_RENDER_NODE)
+
+
+class TestArcaine:
+    def test_minimal_params_matches_validated_defaults(self):
+        inv = ArcaineEngine().build(model_path="/models/diffusiongemma", params={}, port=7461, device=DEVICE)
+        assert inv.command == []  # fully env-driven, confirmed via a real container
+        assert inv.env["MODEL_PATH"] == "/models/diffusiongemma"
+        assert inv.env["MAX_SEQ"] == "4096"
+        assert inv.env["DEFAULT_MAX_TOKENS"] == "2048"
+        assert inv.devices == ["/dev/dri/renderD131:/dev/dri/renderD131"]
+
+    def test_diffusion_specific_params_added_when_present(self):
+        inv = ArcaineEngine().build(
+            model_path="/m", params={"denoising_steps": 20, "seed": 42, "served_model_name": "my-model"}, port=7461, device=DEVICE
+        )
+        assert inv.env["DENOISING_STEPS"] == "20"
+        assert inv.env["DEFAULT_SEED"] == "42"
+        assert inv.env["SERVED_MODEL_NAME"] == "my-model"
+
+    def test_no_device_means_no_devices_list(self):
+        inv = ArcaineEngine().build(model_path="/m", params={}, port=7461, device=None)
+        assert inv.devices == []
+
+    def test_device_without_render_node_raises(self):
+        with pytest.raises(ValueError, match="render_node"):
+            ArcaineEngine().build(model_path="/m", params={}, port=7461, device=DEVICE_NO_RENDER_NODE)
+
+
+class TestOpenArc:
+    def test_minimal_params_generates_load_request(self):
+        inv = OpenArcEngine().build(model_path="/models/phi4-mini", params={}, port=8000, device=DEVICE)
+        assert inv.command == []
+        assert inv.devices == ["/dev/dri/renderD131:/dev/dri/renderD131"]
+        assert len(inv.post_start_requests) == 1
+        req = inv.post_start_requests[0]
+        assert req["method"] == "POST"
+        assert req["path"] == "/openarc/load"
+        assert req["json"] == {
+            "model_path": "/models/phi4-mini",
+            "model_name": "phi4-mini",  # derived from model_path's final component
+            "model_type": "llm",
+            "engine": "ovgenai",
+            "device": "GPU",
+        }
+
+    def test_explicit_model_name_and_type_used(self):
+        inv = OpenArcEngine().build(
+            model_path="/models/phi4-mini",
+            params={"model_name": "my-name", "model_type": "vlm", "openarc_engine": "optimum"},
+            port=8000,
+            device=DEVICE,
+        )
+        req = inv.post_start_requests[0]
+        assert req["json"]["model_name"] == "my-name"
+        assert req["json"]["model_type"] == "vlm"
+        assert req["json"]["engine"] == "optimum"
+
+    def test_no_device_raises(self):
+        with pytest.raises(ValueError, match="GPU device"):
+            OpenArcEngine().build(model_path="/m", params={}, port=8000, device=None)
+
+    def test_device_without_render_node_raises(self):
+        with pytest.raises(ValueError, match="render_node"):
+            OpenArcEngine().build(model_path="/m", params={}, port=8000, device=DEVICE_NO_RENDER_NODE)

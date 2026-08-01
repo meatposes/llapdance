@@ -180,6 +180,7 @@ Granularity:
 
 - **Web UI**: browse image catalog, build/edit test suites, trigger sweeps, view comparison graphs (when a graphing-capable storage adapter is enabled), review coherence results, view deltas against prior runs.
 - **TUI**: same core operations (spin up/down, run adapters, trigger suite) for terminal-only use; graphing views are not required to be duplicated in TUI.
+- **MCP integration (future, not built)**: this suite will need an MCP server surface so agents (not just human operators via web/TUI) can push new test suites/runs and pull back results programmatically. Noted here deliberately early — the orchestrator core (§5) and CLI already expose the operations an MCP server would wrap (`run_suite`/`run_backend`, adapter registry, storage query), so this should be a thin translation layer on top rather than a redesign, but it is explicitly out of scope for this build pass.
 
 ## 14. Out of scope for v1
 

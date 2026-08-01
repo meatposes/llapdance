@@ -82,6 +82,16 @@ class EngineInvocation:
     command: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
     devices: list[str] = field(default_factory=list)
+    post_start_requests: list[dict[str, Any]] = field(default_factory=list)
+    """HTTP requests fired against the running backend's endpoint after the
+    health check passes but before benchmark/coherence adapters run - for
+    engines where starting the container and loading a model are two
+    separate steps (found building the openarc translator: OpenArc starts
+    with no model loaded, a model only becomes servable after POST
+    /openarc/load - not every engine bakes 'load this model' into its
+    start command/env). Each dict: {"method": str, "path": str, "json": dict}.
+    A non-2xx response aborts the run rather than silently proceeding to
+    benchmark a backend with no model loaded."""
 
 
 class EngineTranslator(ABC):

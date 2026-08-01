@@ -58,10 +58,32 @@ class LocalDockerExecutionTarget(ExecutionTargetAdapter):
                 check=True,
             )
         else:
+            # GOTCHA, found building this out for real: `build.path` pointing
+            # at an EXISTING clone and blindly running `git checkout` on it
+            # risks silently discarding or conflicting with someone's actual
+            # working tree (this harness doesn't own that directory just
+            # because a suite config names it). Refuse rather than guess -
+            # a dirty existing clone means either point `build.path` at a
+            # dedicated scratch clone, or commit/stash first.
+            status = subprocess.run(
+                ["git", "-C", str(clone_path), "status", "--porcelain"], capture_output=True, text=True, check=True
+            )
+            if status.stdout.strip():
+                raise RuntimeError(
+                    f"{clone_path} has uncommitted changes - refusing to `git checkout` over it. "
+                    "Point build.path at a dedicated clone, or commit/stash first."
+                )
             subprocess.run(["git", "-C", str(clone_path), "fetch", "origin", build["ref"]], check=True)
             subprocess.run(["git", "-C", str(clone_path), "checkout", build["ref"]], check=True)
 
-        image_tag = f"llapdance/{backend_config['name']}:{build['ref']}"
+        # Build-version tracking: tag with the actual resolved commit, not
+        # just the branch/ref name - two builds of the same branch at
+        # different times must be distinguishable from the image tag alone.
+        commit_sha = subprocess.run(
+            ["git", "-C", str(clone_path), "rev-parse", "--short", "HEAD"], capture_output=True, text=True, check=True
+        ).stdout.strip()
+
+        image_tag = f"llapdance/{backend_config['name']}:{build['ref']}-{commit_sha}"
         image, _logs = self._client.images.build(
             path=str(clone_path),
             dockerfile=build["dockerfile"],

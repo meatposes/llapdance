@@ -53,5 +53,6 @@ def load_builtin_adapters() -> None:
     from llapdance.plugins.benchmark import generic_http, llama_benchy  # noqa: F401
     from llapdance.plugins.coherence import fixed_questions  # noqa: F401
     from llapdance.plugins.storage import flat_file  # noqa: F401
+    from llapdance.plugins.storage import opensearch  # noqa: F401
     from llapdance.plugins.execution import local_docker  # noqa: F401
-    from llapdance.plugins.engine import llama_cpp_sycl, qxmx  # noqa: F401
+    from llapdance.plugins.engine import arcaine, llama_cpp_sycl, openarc, qxmx  # noqa: F401

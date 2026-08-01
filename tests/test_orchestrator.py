@@ -1,5 +1,7 @@
 from typing import Any
 
+import pytest
+
 from llapdance.config.models import (
     BackendConfig,
     BackendSource,
@@ -84,6 +86,9 @@ class FakeEngineTranslator(EngineTranslator):
             command=["generated", "-m", model_path, "-c", str(params.get("context_size", 1234))],
             env={"GENERATED": "1"},
             devices=[],
+            post_start_requests=[{"method": "POST", "path": "/load", "json": {"model": model_path}}]
+            if params.get("with_post_start")
+            else [],
         )
 
 
@@ -221,3 +226,67 @@ def test_explicit_command_overrides_engine_translator(tmp_path, monkeypatch):
     # precedence over anything the translator generated for the same key
     assert outcome.result.backend_config["command"] == ["my-own-command"]
     assert outcome.result.backend_config["env"] == {"GENERATED": "1", "MINE": "1"}
+
+
+def test_post_start_requests_fired_after_health_check(tmp_path, monkeypatch):
+    # for engines like OpenArc where "container started" and "model loaded"
+    # are separate steps - see llapdance/plugins/engine/openarc.py
+    monkeypatch.setattr(orchestrator, "_wait_until_ready", lambda *a, **k: None)
+    _register_fakes()
+    _patch_execution(monkeypatch)
+
+    calls = []
+
+    class FakeResponse:
+        status_code = 200
+        text = "ok"
+
+    def fake_request(method, url, json=None, timeout=None):
+        calls.append((method, url, json))
+        return FakeResponse()
+
+    monkeypatch.setattr(orchestrator.httpx, "request", fake_request)
+
+    suite = _suite(
+        tmp_path,
+        backends=[
+            BackendConfig(
+                name="engine-a",
+                source=BackendSource(mode=SourceMode.prebuilt, image="x:y"),
+                model="m",
+                model_path="/models/m.gguf",
+                engine="fake-engine",
+                params={"shared": {"with_post_start": True}},
+            )
+        ],
+    )
+    orchestrator.run_backend(suite, suite.backends[0])
+    assert calls == [("POST", "http://fake:8000/load", {"model": "/models/m.gguf"})]
+
+
+def test_post_start_request_failure_aborts_run(tmp_path, monkeypatch):
+    monkeypatch.setattr(orchestrator, "_wait_until_ready", lambda *a, **k: None)
+    _register_fakes()
+    _patch_execution(monkeypatch)
+
+    class FakeErrorResponse:
+        status_code = 500
+        text = "model load failed"
+
+    monkeypatch.setattr(orchestrator.httpx, "request", lambda *a, **k: FakeErrorResponse())
+
+    suite = _suite(
+        tmp_path,
+        backends=[
+            BackendConfig(
+                name="engine-a",
+                source=BackendSource(mode=SourceMode.prebuilt, image="x:y"),
+                model="m",
+                model_path="/models/m.gguf",
+                engine="fake-engine",
+                params={"shared": {"with_post_start": True}},
+            )
+        ],
+    )
+    with pytest.raises(RuntimeError, match="model load failed"):
+        orchestrator.run_backend(suite, suite.backends[0])

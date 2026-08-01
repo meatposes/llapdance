@@ -15,6 +15,11 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pytest-mock>=3.14"]
+# Storage is flat-file by default (SPEC.md §8) - opensearch-py is only
+# needed if a suite actually configures the opensearch storage adapter.
+# Not a core dependency; the adapter module imports it lazily so merely
+# having llapdance installed never requires it.
+opensearch = ["opensearch-py>=2.4"]
 
 [project.scripts]
 llapdance = "llapdance.cli:main"

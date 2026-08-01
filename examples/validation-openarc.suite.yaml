@@ -1,0 +1,58 @@
+# Fourth backend, validating the OpenArc integration - see VALIDATION.md
+# "Arcaine + OpenArc" section for the post_start_requests gotcha this one
+# required.
+name: validation-openarc
+
+backends:
+  - name: openarc-validation
+    source:
+      mode: prebuilt
+      image: "openarc:dev"
+    model: "Phi-4-mini-instruct-int4-ov"
+    model_path: "/models/phi4-mini"   # in-container path, see volumes below - an
+                                      # OpenVINO IR model DIRECTORY, not a single file
+    engine: "openarc"
+    port: 8000
+    volumes:
+      /mnt/ignite/LLM/models/OpenVINO/Phi-4-mini-instruct-int4-ov: /models/phi4-mini
+    params:
+      backend_specific:
+        model_name: "phi4-mini"
+        model_type: "llm"
+        openarc_engine: "ovgenai"   # NOT "optimum" - only valid for emb/rerank, see VALIDATION.md
+    # GOTCHA: OpenArc's /v1/models returns 200 with an EMPTY list before any
+    # model is loaded - this only confirms the server process is up, not
+    # that a model is servable. Model loading happens via post_start_requests
+    # (see llapdance/plugins/engine/openarc.py), which the orchestrator runs
+    # AFTER this health check passes and blocks on before running adapters.
+    health_path: "/v1/models"
+    startup_timeout_s: 120
+    network:
+      mode: disabled
+
+device_target:
+  mode: indices
+  indices: [3]   # same idle B70 used for every backend validated so far
+
+execution_target:
+  mode: local
+
+benchmark_adapters:
+  - adapter: generic-http
+    config:
+      model: "phi4-mini"   # must match model_name passed to /openarc/load above
+      prompt: "In one sentence, what is a hash table?"
+      max_tokens: 64
+      num_requests: 3
+
+coherence_adapters:
+  - adapter: fixed-questions
+    config:
+      model: "phi4-mini"
+
+storage:
+  flat_file_dir: "./results"
+  extra_adapters: []
+
+min_free_vram_mb: 4096
+allow_unknown_vram: false

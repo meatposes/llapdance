@@ -110,6 +110,13 @@ class BackendConfig(BaseModel):
         "far (Intel /dev/dri render nodes) - there is no vendor-aware auto-detection of "
         "which device nodes a GPU needs, this is raw passthrough, deployer's responsibility.",
     )
+    post_start_requests: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="HTTP requests ({'method','path','json'}) fired against the running "
+        "backend after health check passes, before benchmark/coherence adapters run. For "
+        "engines where 'container started' and 'model loaded' are separate steps (e.g. "
+        "OpenArc: POST /openarc/load after the server is already up). Non-2xx aborts the run.",
+    )
 
 
 class DeviceTargetMode(str, Enum):
