@@ -7,7 +7,7 @@ from __future__ import annotations
 import socket
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 
@@ -18,21 +18,39 @@ from llapdance.core.result import RunResult
 from llapdance.plugins import registry
 from llapdance.plugins.base import RunningBackend, StorageAdapter
 
+# Real gap found building the TUI (SPEC.md §13): this module had ZERO
+# progress visibility of any kind - a caller (CLI, TUI, MCP) could not tell
+# "building image" from "waiting for health check" from "running
+# coherence" without reading logs by hand. `on_event` is a plain string
+# callback, fired at real stage transitions - opt-in (defaults to a no-op)
+# so every existing caller is unaffected.
+EventCallback = Callable[[str], None]
+
+
+def _noop_event(_message: str) -> None:
+    pass
+
 
 class StartupTimeoutError(RuntimeError):
     """Backend never became healthy within startup_timeout_s."""
 
 
-def _wait_until_ready(endpoint: str, health_path: str, timeout_s: float) -> None:
+def _wait_until_ready(endpoint: str, health_path: str, timeout_s: float, on_event: EventCallback = _noop_event) -> None:
     deadline = time.monotonic() + timeout_s
     last_error: Exception | None = None
+    attempt = 0
+    on_event(f"waiting for health check at {endpoint}{health_path} (timeout {timeout_s:.0f}s)...")
     while time.monotonic() < deadline:
+        attempt += 1
         try:
             resp = httpx.get(endpoint.rstrip("/") + health_path, timeout=5)
             if resp.status_code == 200:
+                on_event(f"healthy after {attempt} attempt(s)")
                 return
         except httpx.HTTPError as exc:
             last_error = exc
+        if attempt % 5 == 0:
+            on_event(f"still waiting for health check (attempt {attempt})...")
         time.sleep(2)
     raise StartupTimeoutError(
         f"backend did not become healthy at {endpoint}{health_path} within {timeout_s}s "
@@ -156,7 +174,9 @@ def _vram_preflight(device_indices: list[int], runner: CommandRunner, min_free_m
             )
 
 
-def _run_adapters_with_telemetry(suite: TestSuite, endpoint: str) -> tuple[list, list, list]:
+def _run_adapters_with_telemetry(
+    suite: TestSuite, endpoint: str, on_event: EventCallback = _noop_event
+) -> tuple[list, list, list]:
     """Runs benchmark + coherence adapters bracketed by telemetry
     start()/stop() (SPEC.md §5 - telemetry is a third concern, distinct
     from throughput and correctness). Shared by both the normal and
@@ -165,16 +185,23 @@ def _run_adapters_with_telemetry(suite: TestSuite, endpoint: str) -> tuple[list,
     started = [
         (registry.get("telemetry", ref.adapter)(ref.config), ref.config) for ref in suite.telemetry_adapters
     ]
+    if started:
+        on_event(f"starting telemetry: {', '.join(r.adapter for r in suite.telemetry_adapters)}")
     handles = [(adapter, adapter.start(config)) for adapter, config in started]
 
-    benchmarks = [
-        registry.get("benchmark", ref.adapter)(ref.config).run(endpoint, ref.config)
-        for ref in suite.benchmark_adapters
-    ]
-    coherence = [
-        registry.get("coherence", ref.adapter)(ref.config).run(endpoint, ref.config)
-        for ref in suite.coherence_adapters
-    ]
+    benchmarks = []
+    for ref in suite.benchmark_adapters:
+        on_event(f"running benchmark: {ref.adapter}...")
+        result = registry.get("benchmark", ref.adapter)(ref.config).run(endpoint, ref.config)
+        on_event(f"benchmark {ref.adapter} done: {result.metrics}")
+        benchmarks.append(result)
+
+    coherence = []
+    for ref in suite.coherence_adapters:
+        on_event(f"running coherence: {ref.adapter}...")
+        result = registry.get("coherence", ref.adapter)(ref.config).run(endpoint, ref.config)
+        on_event(f"coherence {ref.adapter} done: {result.passed}/{result.total} passed")
+        coherence.append(result)
 
     telemetry = [adapter.stop(handle) for adapter, handle in handles]
     return benchmarks, coherence, telemetry
@@ -211,16 +238,20 @@ def _device_target_result(suite: TestSuite, devices: list[DeviceInfo]) -> dict[s
     }
 
 
-def run_backend(suite: TestSuite, backend: BackendConfig) -> RunOutcome:
+def run_backend(suite: TestSuite, backend: BackendConfig, on_event: EventCallback = _noop_event) -> RunOutcome:
     if backend.source.mode.value == "external":
-        return _run_external_backend(suite, backend)
+        return _run_external_backend(suite, backend, on_event)
 
+    on_event("resolving device(s)...")
     runner = _make_runner(suite.execution_target)
     execution = registry.get("execution", _execution_adapter_name(suite.execution_target))(
         suite.execution_target.model_dump()
     )
     devices = _resolve_devices(suite, runner)
+    for d in devices:
+        on_event(f"device resolved: {d.name} (index {d.index}, render_node {d.render_node})")
     device_indices = [d.index for d in devices]
+    on_event("checking free VRAM...")
     _vram_preflight(device_indices, runner, min_free_mb=suite.min_free_vram_mb, allow_unknown=suite.allow_unknown_vram)
 
     # Only the first resolved device is handed to an EngineTranslator - both
@@ -229,14 +260,20 @@ def run_backend(suite: TestSuite, backend: BackendConfig) -> RunOutcome:
     # (see VALIDATION.md).
     backend_dict = _apply_engine_translator(backend, devices[0] if devices else None)
 
+    on_event(f"preparing image ({backend.source.mode.value})...")
     image_ref = execution.build(backend_dict)
+    on_event(f"image ready: {image_ref}")
+    on_event("starting container...")
     running = execution.start(backend_dict, image_ref, device_indices)
     try:
-        _wait_until_ready(running.endpoint, backend.health_path, backend.startup_timeout_s)
+        _wait_until_ready(running.endpoint, backend.health_path, backend.startup_timeout_s, on_event)
+        if backend_dict["post_start_requests"]:
+            on_event("running post-start requests...")
         _run_post_start_requests(running.endpoint, backend_dict["post_start_requests"])
 
-        benchmarks, coherence, telemetry = _run_adapters_with_telemetry(suite, running.endpoint)
+        benchmarks, coherence, telemetry = _run_adapters_with_telemetry(suite, running.endpoint, on_event)
     finally:
+        on_event("stopping container...")
         execution.stop(running)
 
     storages = _build_storage_adapters(suite)
@@ -270,11 +307,14 @@ def run_backend(suite: TestSuite, backend: BackendConfig) -> RunOutcome:
     previous = storages[0].previous_for(backend.name, limit=1)
     for storage in storages:
         storage.write(result)
+    on_event("done")
 
     return RunOutcome(result=result, delta_against=previous[0] if previous else None)
 
 
-def _run_external_backend(suite: TestSuite, backend: BackendConfig) -> RunOutcome:
+def _run_external_backend(
+    suite: TestSuite, backend: BackendConfig, on_event: EventCallback = _noop_event
+) -> RunOutcome:
     """No build/start/stop at all - SPEC.md's 'test a backend that's
     already loaded' case (e.g. through llm-proxy). No device probing/VRAM
     preflight either: this harness manages none of the GPU allocation for
@@ -282,7 +322,7 @@ def _run_external_backend(suite: TestSuite, backend: BackendConfig) -> RunOutcom
     `backend.device_note` (unverified, free text) is the only device
     identity captured - see _device_target_result's `verified` flag."""
     running = _ExternalRunningBackend(backend.source.endpoint)
-    benchmarks, coherence, telemetry = _run_adapters_with_telemetry(suite, running.endpoint)
+    benchmarks, coherence, telemetry = _run_adapters_with_telemetry(suite, running.endpoint, on_event)
 
     storages = _build_storage_adapters(suite)
     result = RunResult(
@@ -299,13 +339,14 @@ def _run_external_backend(suite: TestSuite, backend: BackendConfig) -> RunOutcom
     previous = storages[0].previous_for(backend.name, limit=1)
     for storage in storages:
         storage.write(result)
+    on_event("done")
 
     return RunOutcome(result=result, delta_against=previous[0] if previous else None)
 
 
-def run_suite(suite: TestSuite) -> list[RunOutcome]:
+def run_suite(suite: TestSuite, on_event: EventCallback = _noop_event) -> list[RunOutcome]:
     # Expansion happens here, not at load time - get_suite/list_suites (CLI
     # and MCP) show the compact sweep-spec a suite author wrote; only an
     # actual run sees the expanded cartesian product (SPEC.md §10).
     expanded = expand_suite_sweep(suite)
-    return [run_backend(expanded, backend) for backend in expanded.backends]
+    return [run_backend(expanded, backend, on_event) for backend in expanded.backends]

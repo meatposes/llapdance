@@ -544,6 +544,38 @@ Rewrote `llapdance/plugins/benchmark/llama_benchy.py` as a real adapter: `POST /
 
 Validated live twice - direct adapter call and the full CLI (`llapdance run examples/validation-llama-benchy.suite.yaml`) - both against the real dashboard + real production model. 4 new tests (`httpx.MockTransport`, no real container needed in CI), all passing.
 
+## Twenty-first session — TUI rebuild (2026-08-01, continued)
+
+Direct, blunt feedback: the TUI was "all but un-usable." Read the original `llapdance/tui/app.py` (74 lines) and confirmed every specific complaint against the actual code, not defensively:
+
+- **"How is a human supposed to read any of this?"** - the suite list was `table.add_row(str(path))`, raw file paths, nothing else.
+- **"Initiate a test of a specific image against a specific backend - could they even?"** - no. The entire input mechanism was `self._search_dir.glob("**/*.suite.yaml")` - you could only run a YAML file that already existed on disk.
+- **"Any method for seeing what models or backends are available?"** - no. The TUI never called `scan_models()`, `describe_engine()`, or the registry - all real, working, CLI-only.
+- **"Entirely example suites you wrote, unorganized"** - confirmed, a flat unsorted glob of 40+ files by the time this session ran.
+- **"No feedback mechanism"** - confirmed: a raw Python dict repr of `bench.metrics` dumped only after the *entire* suite finished - no per-stage visibility at all, because the orchestrator itself had zero logging/callback hooks of any kind.
+
+User chose (asked directly, not assumed): a real interactive run builder, not a patched file browser.
+
+### Orchestrator: added the progress visibility that never existed
+
+`llapdance/core/orchestrator.py` had no logging, no print statements, no callback of any kind - confirmed by grepping the whole file. Added an opt-in `on_event: Callable[[str], None]` parameter (default a no-op, so every existing caller - CLI, MCP, tests - is unaffected) threaded through `run_backend`/`_run_external_backend`/`_wait_until_ready`/`_run_adapters_with_telemetry`/`run_suite`, firing at every real stage transition: resolving device(s), VRAM check, image prep, container start, health-check polling (including periodic "still waiting" updates, not just silence for the whole timeout), post-start requests, each benchmark/coherence adapter by name, container stop, done. 1 new test confirms real firing order (container must start before adapters run).
+
+### New TUI: `llapdance/tui/screens.py` (new file) - three real screens
+
+- **`ModelBrowserScreen`** - the same `scan_models()` + `annotate_tested_status()` the CLI's `llapdance models` uses, not a hardcoded list. Real format/quant/compatible-engines/tested-status columns.
+- **`BuildScreen`** - pick a real registered engine (`available("engine")`) and a real discovered device (`discover_devices()`), supply an image, then generate a real suite (the same `TestSuite`/`BackendConfig` Pydantic models the CLI validates against) as **editable YAML** before running. Deliberately not fully automatic: this harness has too many real per-engine gotchas (HF cache symlinks, vLLM's `/dev/dri/by-path` mount, per-engine health-check conventions) to pretend one-size-fits-all defaults are always correct - showing the exact generated config and letting a human fix it is the honest choice, not a cop-out.
+- **`RunScreen`** - live progress via the new `on_event` callback, streamed into a `RichLog` from a background thread; a clear color-coded PASS/FAIL banner (all coherence adapters at 100%) plus real per-adapter metrics at the end, not a raw dict.
+
+### Three real bugs found getting the first live end-to-end validation to actually pass
+
+Targeted `Phi-4-mini-instruct-int4-ov` via `openarc` (already known-good from earlier sessions) specifically to isolate TUI-introduced bugs from model/engine issues.
+
+1. **Worker-thread bug**: `RunScreen.on_mount` called `self.run_worker(self._run(), thread=True, ...)` - the parentheses call `_run()` **immediately, on the main thread** (a plain method, not a coroutine), instead of passing the method reference. `_log()`'s `call_from_thread` then correctly detected it wasn't actually on a separate thread and raised. **The original TUI had the exact same mistake** (`self.run_worker(self._run(path), exclusive=True, thread=True)`) - there `_run` was `async def`, meaning Textual would've scheduled the coroutine onto the main event loop instead of a thread, so `run_suite()`'s fully synchronous, blocking call would have frozen the *entire UI*, not just looked frozen. Fixed: pass `self._run` (no call).
+2. **Model-name mismatch**: the generated benchmark/coherence configs never set a `model` field, defaulting to the literal string `"default"`. Confirmed via a real container (manual reproduction, not guessed) that OpenArc doesn't fail cleanly on an unrecognized model name - it returns HTTP 200 then crashes the SSE stream mid-response (`ValueError: Model 'default' is not loaded or no worker is available`, the exact same error class as the earlier `phi-2` chat-template crash), which httpx surfaces as a raw `RemoteProtocolError`/disconnect. Fixed: `BuildScreen` now uses one consistent `served_name` across `backend_specific.model_name`/`served_model_name` and both adapters' `model` config.
+3. (Structural, not a bug per se) `Static` widgets in this Textual version (8.2.8) don't expose `.renderable` - use `.render()`. Only affected test assertions, not the app itself.
+
+**Fourth attempt: clean pass**, real container, real progress log through every stage in order, real metrics (88.6 tok/s), real 10/10 coherence, clear `PASS` banner, clean teardown confirmed via `docker ps -a`. 6 new tests (Textual's `run_test()` pilot harness, sync wrappers around `asyncio.run()` since `pytest-asyncio` isn't installed) plus the model-name-consistency regression test.
+
 ## Updated adapter status (see README.md, now reflects reality instead of aspiration)
 
 | Adapter | Status |

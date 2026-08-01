@@ -4,7 +4,17 @@ Live document — updated as work progresses. See VALIDATION.md for the full
 writeup and SPEC_REVIEW.md for the "are we still on track" assessment (now
 partly resolved - see its update note at the top).
 
-## Session complete (2026-08-01, continued) — llama-benchy was never actually a stub
+## Session complete (2026-08-01, continued) — TUI rebuild after direct "unusable" feedback
+
+Read the original 74-line TUI and confirmed every specific complaint against the actual code: raw file paths with no info, no way to test an arbitrary model without hand-writing YAML first, no model/engine discovery, no live progress (orchestrator had zero logging/callbacks of any kind), a raw Python dict dumped only after the whole suite finished.
+
+- [x] Added `on_event` progress callback to the orchestrator (opt-in, default no-op) - real per-stage visibility that never existed.
+- [x] Rebuilt the TUI as 3 real screens (`llapdance/tui/screens.py`): model browser (real `scan_models`/tested-status), build screen (real engine/device picker + editable generated-YAML preview - not fully automatic, too many real per-engine gotchas to fake one-size-fits-all), run screen (live log + clear PASS/FAIL summary).
+- [x] Found and fixed 2 real bugs getting the first live validation to pass: a worker-thread mistake (`self._run()` called immediately instead of passing `self._run` - **the original TUI had the identical bug**, which as an async method there would have frozen the whole UI, not just looked frozen); and a model-name mismatch that crashed OpenArc's SSE stream mid-response (confirmed via a real container, same error class as the earlier `phi-2` crash).
+- [x] Fourth attempt: clean pass, real container, real progress log, real metrics, 10/10 coherence, clean teardown.
+- [x] 6 new tests (Textual's pilot harness), 1 new orchestrator test, committed.
+
+## Prior session (2026-08-01, continued) — llama-benchy was never actually a stub
 
 Direct question prompted re-investigation: the long-standing "no discoverable API" conclusion was wrong - it guessed at routes instead of reading the running container's own source. Found a real, complete Flask JSON API (`/api/start`, SSE progress stream, `/api/results/.../export/json`). Rewrote `llapdance/plugins/benchmark/llama_benchy.py` as a real async start/poll/fetch adapter (needs its own `dashboard_url`, distinct from the model server `endpoint`).
 

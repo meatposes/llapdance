@@ -150,6 +150,35 @@ def test_run_backend_end_to_end(tmp_path, monkeypatch):
     assert second.delta_against.run_id == outcome.result.run_id
 
 
+def test_on_event_fires_at_real_stage_transitions(tmp_path, monkeypatch):
+    # Real gap found building the TUI: orchestrator had zero progress
+    # visibility. on_event is opt-in (default no-op, see other tests above
+    # passing with none) - this confirms it actually fires, and in a
+    # sensible order, when a caller does supply one.
+    monkeypatch.setattr(orchestrator, "_wait_until_ready", lambda *a, **k: None)
+    _register_fakes()
+    suite = _suite(tmp_path)
+    orig_get = registry.get
+
+    def get_with_fake_execution(kind, name):
+        if kind == "execution":
+            return FakeExecutionTarget
+        return orig_get(kind, name)
+
+    monkeypatch.setattr(orchestrator.registry, "get", get_with_fake_execution)
+
+    events: list[str] = []
+    orchestrator.run_backend(suite, suite.backends[0], on_event=events.append)
+
+    assert any("starting container" in e for e in events)
+    assert any("running benchmark: fake-benchmark" in e for e in events)
+    assert any("running coherence: fake-coherence" in e for e in events)
+    assert any("stopping container" in e for e in events)
+    assert events[-1] == "done"
+    # order matters: container must start before adapters run
+    assert events.index("starting container...") < events.index("running benchmark: fake-benchmark...")
+
+
 def test_run_backend_skips_device_probe_when_mode_none(tmp_path, monkeypatch):
     monkeypatch.setattr(orchestrator, "_wait_until_ready", lambda *a, **k: None)
     _register_fakes()
