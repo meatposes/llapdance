@@ -1,0 +1,34 @@
+# Validates the pinbench coherence adapter (SPEC.md "prior art" table,
+# llapdance/plugins/coherence/pinbench.py) - a real external tool
+# (https://github.com/ShadyHippo/PinBench), NOT vendored into this repo.
+# Requires a local checkout - clone it yourself and point `pinbench_dir` at
+# it (also needs the `pinbench` extra: `pip install llapdance[pinbench]`,
+# since PinBench's own code imports the `openai` SDK directly).
+#
+# Targets the already-running production llama-cpp-bonsai container
+# directly (source.mode: external, same pattern as
+# validation-external.suite.yaml) - see VALIDATION.md for the real run this
+# was validated against.
+name: validation-pinbench
+
+backends:
+  - name: bonsai-pinbench
+    source:
+      mode: external
+      endpoint: "http://127.0.0.1:8001"
+    model: "Ternary-Bonsai-27B-Q2_0.gguf"
+    device_note: "GPU1 (this server), Ternary Bonsai already loaded - see validation-external.suite.yaml"
+
+benchmark_adapters: []   # required field, but this suite is coherence-only
+
+coherence_adapters:
+  - adapter: pinbench
+    config:
+      pinbench_dir: "/path/to/your/PinBench"   # CHANGE_ME - local checkout, not vendored
+      model: "Ternary-Bonsai-27B-Q2_0.gguf"
+      max_tokens: 512
+      filter_test_ids: [1, 2, 3]   # remove to run the full 46-test suite
+
+storage:
+  flat_file_dir: "./results"
+  extra_adapters: []

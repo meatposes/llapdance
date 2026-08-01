@@ -23,6 +23,12 @@ opensearch = ["opensearch-py>=2.4"]
 # Only needed to run `llapdance mcp` (SPEC.md §13) - deferred-imported from
 # cli.py's mcp() command, not required for the rest of the tool.
 mcp = ["mcp>=2.0"]
+# Only needed to run the `pinbench` coherence adapter, which shells out to
+# a local PinBench checkout (https://github.com/ShadyHippo/PinBench,
+# external tool, not vendored - see llapdance/plugins/coherence/pinbench.py)
+# using `python_bin` (defaults to this same interpreter). PinBench's own
+# providers.py imports the `openai` SDK and `requests` directly.
+pinbench = ["openai>=1.0", "requests>=2.31"]
 
 [project.scripts]
 llapdance = "llapdance.cli:main"
