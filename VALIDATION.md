@@ -399,6 +399,37 @@ Ran `OpenVINO/Qwen3-0.6B-int4-ov` (previously `untested` per the new catalog fea
 
 Re-ran `examples/validation-arcaine.suite.yaml` (the previously-validated `diffusion_gemma` model, `arcaine-server:latest` - the stale-image KV-cache bug was Qwen3.5-specific, `Qwen35Model::forward`, so the old image is still fine for this model family). 16.35 tok/s, **10/10** coherence, clean teardown - now has a real stored record so the tested-status feature reports it instead of `untested`. Confirmed live: `llapdance models .../RedHatAI --results-dir ./results` now shows `arcaine:pass(10/10)` where it previously showed `untested` (correctly, since the earlier validation's result file wasn't in the current results directory).
 
+## Thirteenth session — searching beyond `/mnt/ignite/LLM/models` for more Arcaine-compatible models, and a real (attempted) fix (2026-08-01, continued)
+
+Direct question: are there other models anywhere that work on Arcaine? The model catalog had only ever been pointed at `/mnt/ignite/LLM/models`. Searched the rest of the filesystem (`/mnt/acheron`, `/mnt/malebolge`, `/mnt/Ironwolf-4TB/Models`, `/mnt/WINMOUNT/models`, `~/.cache/huggingface/hub`) - the last one had real, fully-downloaded models not in the catalog's scan path. Two matched Arcaine's registered `model_type`s:
+
+- **`Qwen/Qwen3.5-27B`** (`model_type: qwen3_5`, exact match, dense) - a real, different checkpoint from both already-validated ones: full bf16, not NVFP4-quantized. Confirmed fully downloaded (52GB, all 11 shards real size, no `.no_exist` markers).
+- **`Qwen/Qwen3.5-35B-A3B`** (`model_type: qwen3_5_moe`, MoE, official Qwen release) - also fully downloaded (67GB, 14 shards).
+
+### Investigated whether the two already-known-broken `qwen3_5_moe` models could actually be fixed
+
+Previously flagged `AEON-7/Ornith-1.0-35B-...-NVFP4` and `urakozz/Ornith-1.0-35B-int4-AutoRound` as broken from a comment-level read of the dispatch code. This session read the loader's actual config parser (`~/Arcaine/src/modeling/qwen3_5_moe/config.hpp`) instead of trusting a comment (a direct lesson from this session's own `NVFP4_DPAS` finding). Its docstring says it expects "the NVFP4 'Qwen-AgentWorld-35B-A3B' text model shipped inside a multimodal container" with a **flat** config (no `text_config` wrapper) and `model.language_model.`-prefixed weight keys.
+
+Read the AEON-7 checkpoint's actual safetensors header (93,346 tensor names, no full weight-loading needed) directly: it genuinely has **zero vision tensors**, every key is `model.language_model.*` - it IS the text-only checkpoint the loader wants, just with the original multimodal repo's nested `config.json` (fields still under `text_config`/`vision_config`) instead of the flattened shape, and `model_type: "qwen3_5_moe"` instead of `"qwen3_5_moe_text"`.
+
+**Built a non-destructive fix**: a sibling directory (`...-textfix`) with every file **hard-linked** (not symlinked - a symlink to an absolute host path breaks inside a container whose bind mount only exposes the single model directory, found the hard way, first attempt failed with `Cannot open tokenizer` even though the symlink existed) to the original, plus a patched `config.json` (`text_config` flattened up to top level, `model_type` corrected). Original directory never modified - confirmed after cleanup (`model_type` still reads `qwen3_5_moe`).
+
+**Real result: partially fixed, then hit a genuine tensor-format wall.** Iterated through real container boots against `arcaine-server:qwen35fix`, each time reading the actual crash and fixing forward:
+1. Config parse succeeded once flattened - model type dispatch worked, tokenizer loaded, `93346 tensors in single safetensors file` logged, GPU selected.
+2. Crashed on `tensor not found: model.language_model.layers.0.linear_attn.out_proj.weight_packed`. Read the safetensors header directly to see why: this checkpoint's **MoE expert weights are NVFP4-packed** (`weight_packed`/`weight_scale`/`weight_global_scale`, matches the loader) but its **`linear_attn` (Gated DeltaNet) weights are plain, unquantized** (`out_proj.weight`, no `_packed` suffix) - a genuinely mixed-precision quantization recipe. The loader's tensor lookup for `linear_attn.*` has no dense-weight fallback path (unlike the *dense* `qwen3_5` loader, see below) - it's hard-coded to expect every relevant tensor NVFP4-packed.
+
+This is a real engine-side gap, not something fixable by editing metadata - it would need a source change to Arcaine's `qwen3_5_moe` loader (a dense-weight fallback for `linear_attn`, mirroring what the dense `qwen3_5` loader already does), out of scope for this test harness. Checked the sibling AutoRound checkpoint too before ruling it out further: its `linear_attn` tensors use GPTQ-style `qweight`/`qzeros`/`scales`, a completely different quantization scheme the NVFP4-only loader has no path for at all - confirmed less compatible, not more. **Removed the non-working shim directory** after confirming the dead end, rather than leave a broken artifact sitting in the real model library.
+
+### A genuinely new, real capability found while investigating: the dense loader already supports 3 weight formats
+
+Reading `~/Arcaine/src/modeling/qwen3_5/loader.cpp` (the *dense* Qwen3.5 loader, not MoE) to compare against the MoE loader's rigid NVFP4-only assumption: it explicitly branches on **NVFP4 packed, FP8 (`.weight` + `.weight_scale`), or a plain dense `.weight`** - real multi-format support already built in, unlike the MoE loader. This means `Qwen/Qwen3.5-27B` (full bf16, unquantized, `model_type: qwen3_5` - the dense dispatch) should load without any patching at all.
+
+**Not run**: GPU 3 (the idle B70 used for every validated run this session) has `Memory Physical Size: 32656 MiB` (`xpumcli discovery -d 3`) - roughly 32GB. The bf16 checkpoint is 52GB, won't fit one GPU. Would need Arcaine's multi-GPU layer split (`LAYER_PLACEMENT`/`--layers`), which this harness's translation layer doesn't resolve (see the module docstring in `llapdance/plugins/engine/arcaine.py`: only one device is ever resolved per backend) - a real, larger follow-up, not attempted this session to avoid a guaranteed OOM.
+
+### Bottom line
+
+No, there are no additional models that work on Arcaine beyond the two already validated (`unsloth/Qwen3.6-27B-NVFP4`, `sakamakismile/Huihui-...`) plus `diffusion_gemma`. The two MoE candidates found are real, confirmed-broken by a genuine engine-side tensor-format gap (attempted and documented, not just asserted), and the one plausibly-fixable dense bf16 candidate (`Qwen/Qwen3.5-27B`) needs multi-GPU support this harness doesn't have yet to actually run.
+
 ## Updated adapter status (see README.md, now reflects reality instead of aspiration)
 
 | Adapter | Status |

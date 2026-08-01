@@ -4,7 +4,16 @@ Live document — updated as work progresses. See VALIDATION.md for the full
 writeup and SPEC_REVIEW.md for the "are we still on track" assessment (now
 partly resolved - see its update note at the top).
 
-## Session complete (2026-08-01, continued) — swept more of the catalog using the new tested-status feature
+## Session complete (2026-08-01, continued) — searched beyond the catalog dir, attempted a real fix, found a genuine engine gap
+
+Direct question: any other models anywhere that work on Arcaine? Searched beyond `/mnt/ignite/LLM/models` (the catalog's only scan target so far) - found two real, fully-downloaded Qwen3.5-family models in `~/.cache/huggingface/hub` the catalog never saw.
+
+- [x] Attempted a real fix for the two known-broken `qwen3_5_moe` models: read the loader's actual parser, confirmed AEON-7's checkpoint IS the text-only shape the loader wants (zero vision tensors, `model.language_model.*` keys) just with unflattened config + wrong `model_type` string. Built a non-destructive hard-linked shim with a patched config, tested it live, got further (config now parses, dispatch works) - then hit a genuine engine gap: this checkpoint's `linear_attn` weights are plain/unquantized while the loader hard-requires NVFP4-packed tensors there. Confirmed via reading the safetensors header directly, not guessed. Removed the non-working shim after confirming the dead end; original model directory was never touched.
+- [x] Found (by contrast, reading the *dense* qwen3_5 loader) that it already supports 3 weight formats (NVFP4/FP8/dense bf16) unlike the MoE loader's NVFP4-only assumption - a real capability gap between the two loaders, worth a future Arcaine-side patch to bring the MoE loader up to the same standard.
+- [x] Found a genuinely new candidate model (`Qwen/Qwen3.5-27B`, dense bf16, exact dispatch match) but it's 52GB and GPU 3 only has ~32GB VRAM (`xpumcli discovery`) - would need multi-GPU layer split, which this harness's engine-translation layer doesn't support yet (only resolves one device per backend). Not run, to avoid a guaranteed OOM.
+- [x] Bottom line reported: no additional models work on Arcaine right now beyond the two already validated - the two MoE candidates are real, confirmed-broken by an engine-side gap (not a metadata issue after all), and the dense bf16 candidate needs multi-GPU support that doesn't exist yet.
+
+## Prior session (2026-08-01, continued) — swept more of the catalog using the new tested-status feature
 
 Direct follow-up: "sweep some more models in our catalog." Used the new `tested` field to pick real targets.
 
