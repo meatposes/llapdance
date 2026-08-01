@@ -28,14 +28,9 @@ modularity. Suite used: `examples/validation.suite.yaml`.
 
 Adding the new startup-readiness poll (`_wait_until_ready`, see below) broke the existing orchestrator unit tests — they hung for up to 120s because the fake test backend's endpoint (`http://fake:8000`) isn't a real host and the poll kept retrying until `startup_timeout_s`. Fixed by monkeypatching `_wait_until_ready` to a no-op in orchestrator unit tests (`tests/test_orchestrator.py`), and added a dedicated `tests/test_startup_wait.py` that mocks `httpx.get` directly to test the polling/timeout logic in isolation. **Breadcrumb:** any new blocking-network-call added to orchestrator core needs either a fake-friendly seam or its own isolated test — don't let it hide inside a test that's supposed to be about something else.
 
-## Bug found in the target under test: llama.cpp tokenizer crash
+## Retracted claim: NOT a llama.cpp bug — invalid test setup on my part
 
-Not a harness bug — a real, reproducible bug in the environment being tested, caught precisely because we tried to run a coherence-style request against it:
-
-- `llama-cpp-bonsai:meat6-hardened` + `Ternary-Bonsai-27B-dspark-Q4_1.gguf` loads fine, answers `/health` fine, then **SIGSEGVs** (`GGML_ASSERT(tokenizer && "Tokenizer not initialized...")`) on the very first `/v1/chat/completions` request.
-- The same image with `Ternary-Bonsai-27B-Q2_0.gguf` (the variant already running in production) answers correctly (`12 + 30 = **42**`).
-- This is exactly the "loads and looks fine, then falls over or produces garbage on real use" failure class the coherence check exists to catch (SPEC.md §11) — except this one crashes outright rather than producing garbled output, which the benchmark/health-check alone would have completely missed (health was `{"status":"ok"}` right up until the crash).
-- Not yet root-caused (custom `-dspark` quant variant vs. tokenizer init path in this particular build) — flagging for whoever owns that image/quant next.
+An earlier version of this doc claimed `Ternary-Bonsai-27B-dspark-Q4_1.gguf` crashing on inference was a "real bug caught by the coherence check." That was wrong, and the correction matters: **`-dspark` names a speculative-decode draft/auxiliary artifact, not a standalone servable model.** Loading it alone as the main model was an invalid test configuration on my part, not a discovery about llama.cpp or this image. The SIGSEGV it produced (`GGML_ASSERT(tokenizer && ...)`) is the expected failure mode of feeding the server a file it was never meant to run standalone — there is no confirmed bug in `llama-cpp-bonsai:meat6-hardened` from this session. Left this section in, corrected, rather than deleting it silently, because the mistake (not checking what a `-dspark`-suffixed artifact actually is before treating it as a normal quant) is the thing worth remembering, not the false "bug found."
 
 ## What this proves about "modular enough to be configurable"
 
@@ -64,7 +59,7 @@ These were missing entirely before this validation pass — the spec anticipated
 |---|---|
 | `local-docker` execution | Real, validated against actual GPU hardware today. |
 | `generic-http` benchmark | Real, validated — got real TTFT/throughput numbers from a real llama.cpp server. |
-| `fixed-questions` coherence | Real, validated — 10/10 against a working model; also indirectly caught the tokenizer crash bug during earlier iteration of this same suite. |
+| `fixed-questions` coherence | Real, validated — 10/10 against a working model. (An earlier draft of this doc claimed it also caught a "tokenizer crash bug" — retracted, see above; that crash was my invalid test setup, not a finding.) |
 | `flat-file` storage | Real, validated — write + delta-lookup both exercised. |
 | `llama-benchy` benchmark | Still a stub — unrelated to today's validation, no new information. |
 | SSH execution target | Not built. Today's `RunningBackend`/`ExecutionTargetAdapter` contract was exercised only locally; nothing here contradicts the contract working remotely, but it's unverified. |
