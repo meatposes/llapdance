@@ -458,6 +458,18 @@ Downloaded it for real (`hf download ... --local-dir`, 21GB, confirmed `model_ty
 
 **But a separate, new, real finding**: only 5/10 fixed-questions passed. Checked the actual failures (never guess) - this is NOT the same benign truncation issue found with `OpenVINO/Qwen3-0.6B-int4-ov` or fixed by the `max_tokens` change this session. The failing answers are genuinely degenerate: repeated empty `<think>\n\n</think>` loops or repeated backtick blocks filling the entire response, e.g. `"<think>\n\n</think>\n\n<think>\n\n</think>\n\n<think>\n\n</think>..."` eight times over, never reaching real content. All 5 passes were plain keyword matches (`graded_by_match: 5`), not LLM-judged - meaning the passing answers actually contained the right keyword, while the failing ones never generated any real content at all. Same `max_tokens: 64` as every other coherence run (not a budget issue this time - a real generation-quality/stability issue with this checkpoint under Arcaine's default sampling settings). Not investigated further this session (would need looking at default temperature/repetition-penalty/MTP-speculative-decode interaction) - flagged honestly as a new open finding rather than something quietly worked around.
 
+## Sixteenth session — 3 more catalog models (2026-08-01, continued)
+
+Direct follow-up: sweep a few more untested catalog models.
+
+| Model | Result |
+|---|---|
+| `Phi-3.5-mini-instruct-int8-ov` | Clean: 99.5 tok/s, 10/10 coherence. |
+| `Qwen3-8B-int8-ov` (`max_tokens: 512` per the reasoning-model fix) | Clean: 58.4 tok/s, 10/10 coherence. |
+| `TinyLlama-1.1B-Chat-v1.0-int4-ov` | 267 tok/s (small model, as expected), but **7/10 coherence - real wrong answers, not a bug.** Checked the actual failures: `"Spell 'cat' backwards"` -> `"tas"` (repeated several times, wrong - correct is `"tac"`), `"chemical symbol for water"` -> `"H"` (wrong, should be H2O), `"9 * 9"` -> `"72"` (wrong, should be 81). Real content in every answer, genuinely incorrect - a real capability limitation of a 1.1B model on basic reasoning/spelling, not a harness or truncation issue (distinct from both the `phi-2` crash and the AgentWorld MoE's empty-`<think>`-loop degenerate output found in prior sessions). |
+
+Clean teardown confirmed for all three.
+
 ## Updated adapter status (see README.md, now reflects reality instead of aspiration)
 
 | Adapter | Status |

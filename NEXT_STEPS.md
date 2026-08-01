@@ -4,7 +4,11 @@ Live document — updated as work progresses. See VALIDATION.md for the full
 writeup and SPEC_REVIEW.md for the "are we still on track" assessment (now
 partly resolved - see its update note at the top).
 
-## Session complete (2026-08-01, continued) — closed out the MoE-loader question with the official checkpoint
+## Session complete (2026-08-01, continued) — 3 more catalog models swept
+
+`Phi-3.5-mini-instruct-int8-ov` (clean, 10/10), `Qwen3-8B-int8-ov` (clean, 10/10, `max_tokens: 512`), `TinyLlama-1.1B-Chat-v1.0-int4-ov` (7/10 - real wrong answers from a small model: "cat" backwards -> "tas", water -> "H" not H2O, 9*9 -> "72" not 81 - a genuine capability limit, not a bug). Clean teardown confirmed, committed.
+
+## Prior session (2026-08-01, continued) — closed out the MoE-loader question with the official checkpoint
 
 Downloaded `Frosty40/Qwen-AgentWorld-35B-A3B-NVFP4` (Arcaine README's 4th "Supported Model", the exact MoE checkpoint - real answer to "was the AEON-7/urakozz crash a genuine Arcaine bug or bad checkpoints?"). **It loads and runs cleanly** - confirms the earlier crashes were bad third-party quantization recipes, not an Arcaine bug. But found a new, separate issue: only 5/10 fixed-questions passed, and the failures are genuinely degenerate output (repeated empty `<think>` loops or backtick blocks, not a truncation issue) - a real generation-quality/stability finding under Arcaine's default sampling for this checkpoint, not investigated further this session, flagged honestly rather than worked around.
 
