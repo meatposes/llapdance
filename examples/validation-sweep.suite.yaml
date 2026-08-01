@@ -1,0 +1,53 @@
+# Validates parameter-sweep automation (SPEC.md §10) for real - one
+# backend config, one `sweep` axis, expands into 2 real runs automatically
+# instead of 2 hand-authored suite files. See VALIDATION.md "sweep
+# automation" section.
+name: validation-sweep
+
+backends:
+  - name: qxmx-sweep
+    source:
+      mode: prebuilt
+      image: "qxmx:latest"
+    model: "Ternary-Bonsai-27B-Q2_0"
+    model_path: "/models/Ternary-Bonsai-27B-Q2_0.gguf"
+    engine: "qxmx"
+    port: 8080
+    volumes:
+      /mnt/ignite/LLM/huggingface/gguf/Ternary-Bonsai-27B-gguf: /models
+    params:
+      shared:
+        context_size: 4096   # overridden per sweep combination below
+        kv_cache_quant: "q8_0"
+    health_path: "/health"
+    startup_timeout_s: 120
+    network:
+      mode: disabled
+    sweep:
+      - param: "params.shared.context_size"
+        values: [2048, 4096]
+
+device_target:
+  mode: indices
+  indices: [3]
+
+execution_target:
+  mode: local
+
+benchmark_adapters:
+  - adapter: generic-http
+    config:
+      prompt: "In one sentence, what is a hash table?"
+      max_tokens: 64
+      num_requests: 2
+
+coherence_adapters:
+  - adapter: fixed-questions
+    config: {}
+
+storage:
+  flat_file_dir: "./results"
+  extra_adapters: []
+
+min_free_vram_mb: 4096
+allow_unknown_vram: false

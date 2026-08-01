@@ -41,6 +41,15 @@ from llapdance.plugins.registry import register
 class ArcaineEngine(EngineTranslator):
     name = "arcaine"
 
+    sweepable_params = {
+        "context_size": {"type": "int", "default": 4096, "maps_to": "MAX_SEQ env"},
+        "max_tokens": {"type": "int", "default": 2048, "maps_to": "DEFAULT_MAX_TOKENS env"},
+        "denoising_steps": {"type": "int", "maps_to": "DENOISING_STEPS env", "note": "diffusion-model-specific"},
+        "seed": {"type": "int", "maps_to": "DEFAULT_SEED env"},
+        "layer_placement": {"type": "str", "maps_to": "LAYER_PLACEMENT env", "note": "multi-GPU MoE expert sharding - not resolved from device, raw passthrough only, see module docstring"},
+        "expert_placement": {"type": "str", "maps_to": "EXPERT_PLACEMENT env", "note": "see layer_placement"},
+    }
+
     def build(self, model_path: str, params: dict[str, Any], port: int, device: DeviceInfo | None) -> EngineInvocation:
         context_size = params.get("context_size", 4096)
         max_tokens = params.get("max_tokens", 2048)

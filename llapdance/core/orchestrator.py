@@ -12,6 +12,7 @@ from typing import Any
 import httpx
 
 from llapdance.config.models import BackendConfig, ExecutionTargetConfig, TestSuite
+from llapdance.config.sweep import expand_suite_sweep
 from llapdance.core.probe import CommandRunner, DeviceInfo, LocalRunner, SSHRunner, discover_devices, free_vram_mb
 from llapdance.core.result import RunResult
 from llapdance.plugins import registry
@@ -303,4 +304,8 @@ def _run_external_backend(suite: TestSuite, backend: BackendConfig) -> RunOutcom
 
 
 def run_suite(suite: TestSuite) -> list[RunOutcome]:
-    return [run_backend(suite, backend) for backend in suite.backends]
+    # Expansion happens here, not at load time - get_suite/list_suites (CLI
+    # and MCP) show the compact sweep-spec a suite author wrote; only an
+    # actual run sees the expanded cartesian product (SPEC.md §10).
+    expanded = expand_suite_sweep(suite)
+    return [run_backend(expanded, backend) for backend in expanded.backends]

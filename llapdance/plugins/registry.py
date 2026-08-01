@@ -56,6 +56,13 @@ def available(kind: str) -> list[str]:
     return sorted(_REGISTRIES.get(kind, {}))
 
 
+def describe_engine(name: str) -> dict:
+    """SPEC.md §10's 'catalog of build switches to sweep' - the sweepable
+    params a specific EngineTranslator declares, without instantiating it
+    (it's a class attribute)."""
+    return dict(get("engine", name).sweepable_params)
+
+
 def load_builtin_adapters() -> None:
     """Import the reference adapters so they self-register. Called once at
     CLI/TUI startup; safe to call multiple times."""

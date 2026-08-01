@@ -135,6 +135,19 @@ class EngineTranslator(ABC):
 
     name: str
 
+    sweepable_params: dict[str, dict[str, Any]] = {}
+    """Catalog of the params this translator reads out of the merged
+    params dict (SPEC.md §10's 'cataloging what build switches we'd want
+    to sweep') - a class attribute, not instance state, so it's
+    introspectable without building a translator (`registry.get("engine",
+    name).sweepable_params`). Each entry: {"type": str, "default": Any
+    (optional), "values": list (optional, for enum-like params),
+    "maps_to": str (the concrete flag/env var this becomes)}. This is
+    documentation the code can serve up (`llapdance engines describe
+    <name>`, the `describe_engine` MCP tool) - it does not validate or
+    constrain what a suite's `sweep` axes can actually target; the dotted
+    param path is still just a path into the raw config dict."""
+
     @abstractmethod
     def build(
         self,
