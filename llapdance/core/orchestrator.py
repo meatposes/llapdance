@@ -4,14 +4,38 @@ once - individual adapters never talk to each other directly.
 """
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Any
+
+import httpx
 
 from llapdance.config.models import BackendConfig, TestSuite
 from llapdance.core.probe import discover_devices, free_vram_mb
 from llapdance.core.result import RunResult
 from llapdance.plugins import registry
 from llapdance.plugins.base import StorageAdapter
+
+
+class StartupTimeoutError(RuntimeError):
+    """Backend never became healthy within startup_timeout_s."""
+
+
+def _wait_until_ready(endpoint: str, health_path: str, timeout_s: float) -> None:
+    deadline = time.monotonic() + timeout_s
+    last_error: Exception | None = None
+    while time.monotonic() < deadline:
+        try:
+            resp = httpx.get(endpoint.rstrip("/") + health_path, timeout=5)
+            if resp.status_code == 200:
+                return
+        except httpx.HTTPError as exc:
+            last_error = exc
+        time.sleep(2)
+    raise StartupTimeoutError(
+        f"backend did not become healthy at {endpoint}{health_path} within {timeout_s}s "
+        f"(last error: {last_error})"
+    )
 
 
 class VramPreflightError(RuntimeError):
@@ -80,6 +104,8 @@ def run_backend(suite: TestSuite, backend: BackendConfig) -> RunOutcome:
     image_ref = execution.build(backend.model_dump())
     running = execution.start(backend.model_dump(), image_ref, device_indices)
     try:
+        _wait_until_ready(running.endpoint, backend.health_path, backend.startup_timeout_s)
+
         benchmarks = []
         for ref in suite.benchmark_adapters:
             adapter = registry.get("benchmark", ref.adapter)(ref.config)

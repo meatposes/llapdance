@@ -96,6 +96,11 @@ def _suite(tmp_path, **overrides) -> TestSuite:
 
 
 def test_run_backend_end_to_end(tmp_path, monkeypatch):
+    # _wait_until_ready is a real network poll (proven necessary against a
+    # real llama.cpp container - see VALIDATION.md); the fake backend below
+    # has no real endpoint to poll, so bypass it here rather than let it
+    # burn through startup_timeout_s trying to resolve a fake hostname.
+    monkeypatch.setattr(orchestrator, "_wait_until_ready", lambda *a, **k: None)
     _register_fakes()
     suite = _suite(tmp_path)
     orig_get = registry.get
@@ -121,6 +126,7 @@ def test_run_backend_end_to_end(tmp_path, monkeypatch):
 
 
 def test_run_backend_skips_device_probe_when_mode_none(tmp_path, monkeypatch):
+    monkeypatch.setattr(orchestrator, "_wait_until_ready", lambda *a, **k: None)
     _register_fakes()
     orig_get = registry.get
 

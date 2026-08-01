@@ -9,14 +9,28 @@ import yaml
 from .models import TestSuite
 
 
-def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
-    result = dict(base)
-    for key, value in override.items():
-        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-            result[key] = _deep_merge(result[key], value)
-        else:
-            result[key] = value
-    return result
+def _deep_merge(base: Any, override: Any) -> Any:
+    """Recursive merge. `override` dicts with all-digit keys against a list
+    `base` are treated as index assignments (this is how `--set a.0.b=x`
+    reaches into a YAML list) - GOTCHA: plain dict/dict merging alone
+    silently produced `{"0": {...}}` clobbering the list's type instead of
+    indexing into it; caught by trying to override a real suite's
+    benchmark_adapters list end-to-end, not by unit tests against dicts only."""
+    if isinstance(base, list) and isinstance(override, dict) and override and all(k.isdigit() for k in override):
+        result = list(base)
+        for key, value in override.items():
+            idx = int(key)
+            if idx < len(result):
+                result[idx] = _deep_merge(result[idx], value)
+            else:
+                result.append(value)
+        return result
+    if isinstance(base, dict) and isinstance(override, dict):
+        result = dict(base)
+        for key, value in override.items():
+            result[key] = _deep_merge(result.get(key), value) if key in result else value
+        return result
+    return override
 
 
 def load_suite(path: str | Path, overrides: dict[str, Any] | None = None) -> TestSuite:
