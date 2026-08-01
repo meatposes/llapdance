@@ -448,6 +448,16 @@ Before running `DeepSeek-R1-Distill-Qwen-7B-int4-ov` (a reasoning model), fixed 
 
 Clean teardown confirmed for all three (`docker ps -a`).
 
+## Fifteenth session — the official Arcaine-supported MoE checkpoint, closing out the Thirteenth session's question (2026-08-01, continued)
+
+Direct follow-up: Arcaine's own README lists 4 "Supported Models"; we'd only validated 3 (`DiffusionGemma`, `Unsloth Qwen3.6-27B`, and by extension the dense `qwen3_5` family). The 4th, `Qwen AgentWorld-35B-A3B NVFP4` (`Frosty40/Qwen-AgentWorld-35B-A3B-NVFP4` on HF), is the exact MoE checkpoint the `qwen3_5_moe_text` loader's own source comment describes - and directly answers the open question from the Thirteenth session: were the `AEON-7`/`urakozz` MoE crashes a genuine Arcaine bug, or just incompatible third-party quantization recipes?
+
+Downloaded it for real (`hf download ... --local-dir`, 21GB, confirmed `model_type: "qwen3_5_moe_text"` - the exact registry key, no patching needed unlike the AEON-7 shim attempt).
+
+**Result: it loads and runs. The earlier crashes were genuinely bad third-party checkpoints, not an Arcaine bug.** Real benchmark: 14.7 tok/s, 932ms TTFT, clean teardown, no crash of any kind through the whole run - confirms `ModelRegistry`'s MoE loader itself works correctly given a checkpoint that actually matches its expected tensor layout (NVFP4-packed `linear_attn`, not the mixed-precision AEON-7 recipe that broke it).
+
+**But a separate, new, real finding**: only 5/10 fixed-questions passed. Checked the actual failures (never guess) - this is NOT the same benign truncation issue found with `OpenVINO/Qwen3-0.6B-int4-ov` or fixed by the `max_tokens` change this session. The failing answers are genuinely degenerate: repeated empty `<think>\n\n</think>` loops or repeated backtick blocks filling the entire response, e.g. `"<think>\n\n</think>\n\n<think>\n\n</think>\n\n<think>\n\n</think>..."` eight times over, never reaching real content. All 5 passes were plain keyword matches (`graded_by_match: 5`), not LLM-judged - meaning the passing answers actually contained the right keyword, while the failing ones never generated any real content at all. Same `max_tokens: 64` as every other coherence run (not a budget issue this time - a real generation-quality/stability issue with this checkpoint under Arcaine's default sampling settings). Not investigated further this session (would need looking at default temperature/repetition-penalty/MTP-speculative-decode interaction) - flagged honestly as a new open finding rather than something quietly worked around.
+
 ## Updated adapter status (see README.md, now reflects reality instead of aspiration)
 
 | Adapter | Status |
