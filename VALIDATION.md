@@ -369,6 +369,18 @@ Direct follow-up: find a different Arcaine-compatible model to test. Cross-refer
 
 **Validated live** against the already-fixed `arcaine-server:qwen35fix` image (default flags, no sweep this time): real container boot, real benchmark (8.11 tok/s, 575ms TTFT), **10/10 fixed-questions coherence** — clean pass, no KV-cache crash (confirms the image fix generalizes across checkpoints, not just the one it was validated against). Clean teardown confirmed via `docker ps -a`.
 
+## Eleventh session — model catalog now cross-references real test history (2026-08-01, continued)
+
+Direct request, following the observation that `llapdance models` only ever reported static could-run-on compatibility, never whether a model was actually tried on a backend before: `ModelInfo` gained a `tested: dict[engine, TestedStatus]` field, built by `annotate_tested_status()` cross-referencing `load_run_history()` (every stored `RunResult` in a flat-file results dir) against the catalog scan.
+
+The real matching problem: a `RunResult` only stores the in-container `model_path` (e.g. `/models/qwen35`) plus `volumes` (host->container), while `ModelInfo.path` is always a host path. `_resolve_host_path()` reverses the mount to recover the real host path a run actually pointed at, handling both cases found in real suites: the model root mounted directly (`model_path == container_vol`, the safetensors/OpenVINO case) and a GGUF file nested under a directory mount (`model_path` prefixed by `container_vol`, host path reconstructed from the relative remainder).
+
+Outcome is one of `pass` (100% coherence), `partial` (some failures), or `ran` (completed, but no coherence adapter configured - no correctness signal at all, just "didn't crash"). **Documented the real gap honestly rather than pretend it's complete**: `run_backend` only writes a `RunResult` after a run finishes cleanly - a crash mid-request (like the real Arcaine KV-cache 500 found this session) never reaches storage, so a genuinely broken combination is indistinguishable from "never tried" here. `TestedStatus`'s docstring says so explicitly.
+
+**Validated live** against this session's own real results: `llapdance models /mnt/ignite/LLM/models/unsloth /mnt/ignite/LLM/models/sakamakismile /mnt/ignite/LLM/models/RedHatAI --results-dir ./results` correctly reported `unsloth/Qwen3.6-27B-NVFP4` as `arcaine:partial(5/10)` (the most recent of its two stored results is the `DPAS=1` run - correct, "most recent" semantics working as intended), `sakamakismile/Huihui-...` as `arcaine:pass(10/10)`, and `RedHatAI/diffusiongemma-...` as **`untested`** even though it was validated in an earlier session - honest, because that session's result file isn't present in the current `./results` directory, and the tool doesn't fabricate history it can't find.
+
+Wired into both the CLI (`llapdance models --results-dir DIR`, defaults to `./results`) and the MCP `list_models` tool (`results_dir` param, same default).
+
 ## Updated adapter status (see README.md, now reflects reality instead of aspiration)
 
 | Adapter | Status |
