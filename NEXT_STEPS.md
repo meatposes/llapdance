@@ -143,6 +143,10 @@ Direct follow-up to SPEC_REVIEW.md's top recommendation:
 - [x] **Arcaine** — cataloged the real oneDNN toggle for the validated `diffusion_gemma` model family: `DIFF_ONEDNN_SDPA`, a **runtime env var** (unlike llama.cpp's build-time `GGML_SYCL_DNNL` - same underlying library, different toggle mechanism). Plus `DIFF_ARENA`/`DISABLE_SCRATCH`, `DIFF_PREFILL_CHUNK`, `DIFF_FORCE_DENOISE_STEPS`, `DIFF_HOST_SAMPLER`. Deliberately left uncataloged (and said so in code): a whole separate Qwen3.5 model family (~15 flags) never validated by this harness, and ~13 NVFP4-specific + MoE-specific flags found but not individually characterized.
 - [x] **OpenArc** — real gap found and fixed, not just documented: the translator never forwarded `runtime_config` (OpenArc's actual OpenVINO-tuning surface, confirmed via its own source) even though it looked structurally sweepable. Fixed, **validated live** with a real `PERFORMANCE_HINT` override against the real server.
 
+## Twenty-fourth session addendum
+
+Direct feedback: TUI model tables buried the full absolute host path, and the Configure button needed a huge screen to even see. Fixed: model tables now lead with a short relative name (`_short_model_name`, last 2 path segments) and never show the full path; found and fixed the real cause of the huge-screen requirement — `DataTable` defaulted to filling all remaining vertical space, pushing buttons off-screen at normal terminal sizes (confirmed at 100x30) — capped via `DataTable { height: 12; }`. Also shortened labels/removed redundant instructional text across all four screens. 138 passing.
+
 ## Recommended next session
 
 Per the (now mostly-addressed) spec review, remaining real gaps in priority order:

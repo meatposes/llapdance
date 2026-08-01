@@ -73,6 +73,19 @@ def _coerce_sweep_value(raw: str) -> Any:
     return raw
 
 
+def _short_model_name(path: str) -> str:
+    """Real complaint fixed: the model table showed the FULL absolute host
+    path (e.g. `/mnt/ignite/LLM/models/AEON-7/Ornith-1.0-...`), both as a
+    column and reused in on-screen text. Real model layouts on this
+    project's actual scan directories are consistently `<root>/<org>/
+    <model>` or `<root>/<model>` (confirmed against every path seen this
+    session) - the last two path segments are what a human actually reads
+    to identify a model ("AEON-7/Ornith-1.0-...", "phi-2-int4-ov"), not the
+    scan root prefix repeated on every row."""
+    parts = Path(path).parts
+    return "/".join(parts[-2:]) if len(parts) >= 2 else path
+
+
 def _tested_summary(model: ModelInfo) -> str:
     if not model.tested:
         return "untested"
@@ -92,7 +105,6 @@ class HomeScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header()
         with Vertical():
-            yield Static("[b]LLAPDance[/b] - how do you want to start?")
             yield Button("Test by model →", id="by-model-btn", variant="primary")
             yield Button("Test by backend →", id="by-backend-btn", variant="primary")
         yield Footer()
@@ -131,7 +143,6 @@ class ModelBrowserScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header()
         with Vertical():
-            yield Static("[b]Step 1 of 3:[/b] pick a model to test. Real models found on this machine, cross-referenced against real prior test results.")
             with Horizontal():
                 yield Input(value="/mnt/ignite/LLM/models", id="scan-dirs")
                 yield Button("Scan", id="scan-btn", variant="primary")
@@ -139,7 +150,7 @@ class ModelBrowserScreen(Screen):
             yield Static("", id="status")
             with Horizontal():
                 yield Button("← Back", id="back-btn")
-                yield Button("Configure a run for the selected model →", id="configure-btn", variant="success")
+                yield Button("Configure →", id="configure-btn", variant="success")
         yield Footer()
 
     def action_back(self) -> None:
@@ -147,7 +158,7 @@ class ModelBrowserScreen(Screen):
 
     def on_mount(self) -> None:
         table = self.query_one("#models", DataTable)
-        table.add_columns("Format", "Quant", "Compatible engines", "Tested", "Path")
+        table.add_columns("Model", "Format", "Quant", "Engines", "Tested")
         table.cursor_type = "row"
         self.action_scan()
 
@@ -158,12 +169,12 @@ class ModelBrowserScreen(Screen):
         self._models = scan_models(dirs)
         annotate_tested_status(self._models, load_run_history("./results"))
         for m in self._models:
-            table.add_row(m.format, m.quant_hint, ", ".join(m.compatible_engines) or "(none)", _tested_summary(m), m.path)
+            table.add_row(_short_model_name(m.path), m.format, m.quant_hint, ", ".join(m.compatible_engines) or "-", _tested_summary(m))
         status = self.query_one("#status", Static)
         if self._models:
-            status.update(f"{len(self._models)} models found across {len(dirs)} director(ies). Pick a row, then click/press Enter on 'Configure'.")
+            status.update(f"{len(self._models)} found. Pick a row, click Configure.")
         else:
-            status.update(f"No models found under {' '.join(dirs) or '(no directories given)'} - check the path above and press Scan again.")
+            status.update(f"No models under {' '.join(dirs) or '(none given)'}.")
 
     def action_configure(self) -> None:
         table = self.query_one("#models", DataTable)
@@ -188,11 +199,23 @@ class ModelBrowserScreen(Screen):
             self.action_back()
 
 
+def _short_list(items: list[str], limit: int = 4) -> str:
+    """Cap how many names get printed on one line - real engines can have
+    a dozen+ known env flags (e.g. Arcaine's ARCAINE_QWEN35_* family), and
+    printing all of them wraps a single Static across many lines, which is
+    exactly the "too many lines" complaint this pass is fixing."""
+    if not items:
+        return "-"
+    if len(items) <= limit:
+        return ", ".join(items)
+    return ", ".join(items[:limit]) + f", +{len(items) - limit} more"
+
+
 def _engine_info_text(engine: str) -> str:
     info = describe_engine(engine)
-    params = ", ".join(info["params"].keys()) or "(none declared)"
-    env_flags = ", ".join(info["env_flags"].keys()) or "(none declared)"
-    return f"[b]{engine}[/b] sweepable params: {params}\nknown env flags: {env_flags}"
+    params = _short_list(list(info["params"].keys()))
+    env_flags = _short_list(list(info["env_flags"].keys()))
+    return f"[b]{engine}[/b] params: {params} | env: {env_flags}"
 
 
 class BackendBrowserScreen(Screen):
@@ -212,23 +235,22 @@ class BackendBrowserScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header()
         with Vertical():
-            yield Static("[b]Step 1 of 3:[/b] pick a backend/engine to test against.")
             engines = available("engine")
             yield Select([(e, e) for e in engines], id="engine", value=engines[0] if engines else Select.BLANK)
             yield Static(_engine_info_text(engines[0]) if engines else "(no engines registered)", id="engine-info")
             with Horizontal():
                 yield Input(value="/mnt/ignite/LLM/models", id="scan-dirs")
-                yield Button("Scan for compatible models", id="scan-btn", variant="primary")
+                yield Button("Scan", id="scan-btn", variant="primary")
             yield DataTable(id="models")
             yield Static("", id="status")
             with Horizontal():
                 yield Button("← Back", id="back-btn")
-                yield Button("Configure a run with this backend →", id="configure-btn", variant="success")
+                yield Button("Configure →", id="configure-btn", variant="success")
         yield Footer()
 
     def on_mount(self) -> None:
         table = self.query_one("#models", DataTable)
-        table.add_columns("Format", "Quant", "Compatible?", "Tested", "Path")
+        table.add_columns("Model", "Format", "Quant", "OK?", "Tested")
         table.cursor_type = "row"
 
     def on_select_changed(self, event: Select.Changed) -> None:
@@ -251,10 +273,10 @@ class BackendBrowserScreen(Screen):
         self._models.sort(key=lambda m: engine not in m.compatible_engines)
         for m in self._models:
             compatible = "yes" if engine in m.compatible_engines else "no"
-            table.add_row(m.format, m.quant_hint, compatible, _tested_summary(m), m.path)
+            table.add_row(_short_model_name(m.path), m.format, m.quant_hint, compatible, _tested_summary(m))
         status = self.query_one("#status", Static)
         n_compatible = sum(1 for m in self._models if engine in m.compatible_engines)
-        status.update(f"{n_compatible}/{len(self._models)} models compatible with {engine}. Pick a row, then 'Configure'.")
+        status.update(f"{n_compatible}/{len(self._models)} compatible with {engine}.")
 
     def action_configure(self) -> None:
         table = self.query_one("#models", DataTable)
@@ -313,10 +335,7 @@ class BuildScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header()
         with Vertical():
-            yield Static(
-                f"[b]Step 2 of 3:[/b] configure a run for [b]{self._model.path}[/b] "
-                f"({self._model.format}, {self._model.quant_hint})."
-            )
+            yield Static(f"[b]{_short_model_name(self._model.path)}[/b] ({self._model.format}, {self._model.quant_hint})")
             with Horizontal():
                 engines = self._model.compatible_engines or available("engine")
                 default_engine = self._preselected_engine if self._preselected_engine in engines else (engines[0] if engines else Select.BLANK)
@@ -328,31 +347,28 @@ class BuildScreen(Screen):
                     value=devices[0].index if devices else Select.BLANK,
                 )
             image_options = _local_image_options()
-            yield Select(
-                image_options,
-                id="image-select",
-                value=image_options[0][1] if image_options else Select.BLANK,
-                allow_blank=True,
-                prompt="pick a local image, or type one below",
-            )
-            yield Input(
-                value=image_options[0][1] if image_options else "",
-                placeholder="...or type an image ref directly (e.g. openarc:dev)",
-                id="image",
-            )
+            with Horizontal():
+                yield Select(
+                    image_options,
+                    id="image-select",
+                    value=image_options[0][1] if image_options else Select.BLANK,
+                    allow_blank=True,
+                    prompt="local image...",
+                )
+                yield Input(
+                    value=image_options[0][1] if image_options else "",
+                    placeholder="...or type image ref",
+                    id="image",
+                )
             with Horizontal():
                 yield Input(value="8000", placeholder="port", id="port")
                 yield Input(value="4096", placeholder="context_size", id="context-size")
-            yield Static(
-                "[b]Sweep (optional):[/b] pick a dotted param below and comma-separated values to sweep "
-                "(real mechanism - BackendConfig.sweep, SPEC.md §10 - expands into one run per value)."
-            )
             with Horizontal():
-                yield Select([], id="sweep-param", allow_blank=True, prompt="no sweep")
-                yield Input(placeholder="values, comma-separated (e.g. 2048,4096,8192)", id="sweep-values")
+                yield Select([], id="sweep-param", allow_blank=True, prompt="sweep param (optional)")
+                yield Input(placeholder="sweep values, e.g. 2048,4096", id="sweep-values")
             with Horizontal():
-                yield Button("Generate config ↓", id="generate-btn", variant="primary")
-                yield Button("Run this suite ▶", id="launch-btn", variant="success")
+                yield Button("Generate", id="generate-btn", variant="primary")
+                yield Button("Run ▶", id="launch-btn", variant="success")
                 yield Button("← Back", id="back-btn")
             yield TextArea.code_editor("", language="yaml", id="yaml-preview")
             yield Static("", id="build-status")
@@ -463,11 +479,8 @@ class BuildScreen(Screen):
             suite_dict["backends"][0]["sweep"] = [{"param": sweep_param, "values": values}]
 
         self.query_one("#yaml-preview", TextArea).text = yaml.safe_dump(suite_dict, sort_keys=False)
-        sweep_note = f" This will expand into {len(values)} real runs (sweeping {sweep_param})." if sweep_param != Select.BLANK and sweep_values_raw else ""
-        self.query_one("#build-status", Static).update(
-            "Generated - review/edit above if needed (params.shared, health_path, volumes for engine-specific mounts), "
-            f"then click [b]Run this suite[/b].{sweep_note}"
-        )
+        sweep_note = f" ({len(values)} runs, sweeping {sweep_param})" if sweep_param != Select.BLANK and sweep_values_raw else ""
+        self.query_one("#build-status", Static).update(f"Generated{sweep_note} - edit above if needed, then Run.")
 
     def action_launch(self) -> None:
         raw = self.query_one("#yaml-preview", TextArea).text
@@ -488,7 +501,7 @@ class RunScreen(Screen):
     a run used to look frozen for however long build+start+health-check+
     benchmark+coherence took, then dump a raw Python dict at the very end."""
 
-    BINDINGS = [("escape", "back", "Back to model browser")]
+    BINDINGS = [("escape", "back", "Back")]
 
     def __init__(self, suite: TestSuite) -> None:
         super().__init__()
@@ -497,11 +510,11 @@ class RunScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header()
         with Vertical():
-            yield Static(f"[b]Step 3 of 3:[/b] running [b]{self._suite.name}[/b]. Live progress below.", id="run-title")
+            yield Static(f"Running [b]{self._suite.name}[/b]...", id="run-title")
             yield RichLog(id="log", wrap=True, highlight=True)
             with VerticalScroll(id="summary-container"):
                 yield Static("", id="summary")
-            yield Button("← Back to model browser", id="back-btn")
+            yield Button("← Back", id="back-btn")
         yield Footer()
 
     def on_mount(self) -> None:

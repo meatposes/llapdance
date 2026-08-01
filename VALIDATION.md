@@ -604,6 +604,26 @@ A `sweep-param` `Select` populated from the chosen engine's real `describe_engin
 
 7 new tests (`HomeScreen` button navigation ×2, `BackendBrowserScreen` compatibility marking + engine handoff to `BuildScreen`, sweep-value coercion, real sweep-axis generation), 136 passing total.
 
+## Twenty-fourth session — model-table + button compaction, real DataTable height bug
+
+Direct feedback: model name should be the first column (short relative path, not buried in a full absolute host path), and "the configure button requires a HUGE screen to see... this TUI requires far too many lines and a HUGE resolution."
+
+### Short model names, path hidden entirely
+
+Added `_short_model_name(path)`: joins the last two `Path(path).parts` (e.g. `/mnt/ignite/LLM/models/AEON-7/Ornith-1.0-abc` → `AEON-7/Ornith-1.0-abc`). `ModelBrowserScreen` and `BackendBrowserScreen` tables both now lead with a `Model` column built from this helper; the `Path` column and every full-path string were removed from both tables entirely - confirmed via test (`str(tmp_path) not in str(first_row[0])`).
+
+### Button/label compaction
+
+Shortened every on-screen label across all four screens (`Configure a run for the selected model →` → `Configure →`, `Generate config ↓` → `Generate`, `Run this suite ▶` → `Run ▶`, etc.) and removed several instructional `Static` paragraphs ("Step 1 of 3: ...") that duplicated what placeholder/prompt text on the same widgets already said. Engine param/env-flag info lines capped to `limit=4` names + "+N more" (`_short_list`) instead of wrapping across multiple lines for engines with many flags (Arcaine's `ARCAINE_QWEN35_*` family).
+
+### Real DataTable height bug found and fixed
+
+The actual mechanical cause of "requires a HUGE screen": confirmed via a real pilot check (`run_test(size=(100, 30))`, not the 140×60 used in earlier validation) that `#configure-btn`'s region was `Region(x=16, y=31, width=16, height=3)` on a `Size(width=100, height=30)` screen - `y=31` is one row past the visible height, i.e. genuinely invisible/unclickable at a normal terminal size, not just "small." Root cause: Textual's `DataTable` defaults to filling ALL remaining vertical space in its container - it claimed `Region(x=0, y=2, width=100, height=28)`, 28 of the 30 available rows, regardless of how many actual model rows existed.
+
+Fixed with `DataTable { height: 12; }` in `LLAPDanceApp.CSS` (`app.py`) - the table scrolls internally past 12 rows instead of pushing everything below it off-screen. Re-verified with the same pilot: `configure-btn region: Region(x=16, y=21, width=16, height=3)`, fully inside the 100×30 screen, and confirmed clicking it navigates to `BuildScreen`. Also re-checked `BuildScreen`'s three buttons (`generate-btn`, `launch-btn`, `back-btn`) all visible at the same size after the label/layout compaction.
+
+New regression test `test_configure_button_visible_at_a_normal_terminal_size` pins this at `size=(100, 30)` so it can't regress silently again. 138 passing total.
+
 ## Updated adapter status (see README.md, now reflects reality instead of aspiration)
 
 | Adapter | Status |
