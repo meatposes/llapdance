@@ -16,6 +16,12 @@ class BenchmarkResult(BaseModel):
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
+class TelemetryResult(BaseModel):
+    adapter: str
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
 class CoherenceResult(BaseModel):
     adapter: str
     total: int
@@ -39,3 +45,4 @@ class RunResult(BaseModel):
     device_target: dict[str, Any]
     benchmarks: list[BenchmarkResult] = Field(default_factory=list)
     coherence: list[CoherenceResult] = Field(default_factory=list)
+    telemetry: list[TelemetryResult] = Field(default_factory=list)

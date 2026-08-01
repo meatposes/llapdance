@@ -1,29 +1,36 @@
 # Next steps / in-progress work log
 
 Live document — updated as work progresses. See VALIDATION.md for the full
-writeup of everything below.
+writeup and SPEC_REVIEW.md for the honest "are we still on track" assessment.
 
-## Session complete (2026-08-01, continued) — SSH remote target, GPU tracking, Arcaine fix, external mode
+## Session complete (2026-08-01, continued) — MCP, telemetry, guidellm attempt, spec review
 
-Requested items #5, #1, #4 done and validated for real, plus a new
-capability (external/already-loaded backend mode) added mid-session:
+- [x] **MCP server built and validated** — `llapdance/mcp/server.py`, 5 tools, real stdio client test including a genuine `run_suite` execution pulled back via `get_results`. Real gotcha found: list-returning tools land in `structured_content["result"]`, not `content[0].text`.
+- [x] **Telemetry harness built and validated** — new `telemetry` plugin kind (deliberately separate from `benchmark`), `xmxmon` reference adapter. Real run also caught a genuine "watching the wrong physical GPU" mismatch (telemetry device config and backend device targeting aren't reconciled - a live demonstration of the long-standing GPU-index-space problem).
+- [x] **guidellm attempted for real** — hit a structural limitation (tokenizer resolution requires a real HF Hub repo id, most of what this harness tests isn't one), shipped as an honest stub like `llama-benchy`.
+- [x] **Spec review done** — `SPEC_REVIEW.md`. Portability principle holding, no violations. Spec text fixed in 3 places (stale architecture diagram, missing `source.mode: external`, stale MCP status). Real finding: **sweep automation (§10) and image catalog (§12) are both completely unbuilt**, while engine/execution-target breadth has grown a lot. Recommended pivoting there before adding a 5th engine.
+- [x] README.md / VALIDATION.md / SPEC.md updated, full test suite passing (68 tests), committed + pushed.
 
-- [x] **#4 GPU device identity tracking** — `RunResult.device_target` now carries full `DeviceInfo` (vendor/name/pci_bus_id/render_node) plus a `verified` flag, not just a bare index. Local runs record real hostname too.
-- [x] **Remote hardware probing** — `core/probe.py` now threads an explicit `CommandRunner` (local or SSH) through every discovery function. Found and handled a real gap live: screamer (the remote host) has neither `xpumcli` nor a working host-level OpenCL runtime, added an `lspci`-based third discovery tier (identification only, structurally excludes non-Intel/non-NVIDIA chips).
-- [x] **#5 SSH execution target** — `llapdance/plugins/execution/ssh_docker.py`, built via raw `ssh`+`docker` CLI (not docker-py's `ssh://` transport — needs paramiko, no clean way to pin our identity file). `prebuilt` only, not `build`, over SSH. Also fixed a real bug: the orchestrator had `ExecutionTargetConfig.mode` in its schema for a whole session but never actually read it, hardcoding `"local-docker"` regardless.
-- [x] **Real SSH validation against screamer** — stopped its production `bonsai` container, ran our harness against it remotely (smaller context size for the B50's lower VRAM, per the heads-up), confirmed clean teardown, restarted the original container, confirmed it came back healthy and correct.
-- [x] **#1 Arcaine benchmark fix** — root cause: Arcaine's diffusion decoding emits the whole completion as ONE SSE chunk (not one-token-per-chunk like autoregressive engines), so the old "count SSE lines" heuristic undercounted ~7x. Fixed generically in `generic_http.py` (prefers `usage.completion_tokens` → `metrics.new_token` → `timings.predicted_n` → line-count fallback, records which was used). Re-validated: Arcaine `2.1 → 14.7 tok/s`, llama.cpp unaffected (`34.6 tok/s`, now via the authoritative field).
-- [x] **New: `source.mode: external`** (raised mid-session, not originally on the list) — test an already-loaded backend with zero container lifecycle. Added `api_key`/`headers` support to both adapters (neither sent auth before). Validated against a real already-loaded model through the user's own OpenAI-compatible proxy project.
-- [x] README.md / VALIDATION.md updated, full test suite passing (58 tests), committed + pushed.
+## Recommended next session (per SPEC_REVIEW.md)
 
-## Open items for next session (carried forward, nothing urgent)
+1. **Sweep/parameter-matrix automation** (SPEC.md §10) — take a suite with e.g. `context_size: [2048, 4096, 8192]` and automatically generate + run N backend variants, rather than hand-authoring N suite files. This is the biggest gap between what the spec promised and what exists.
+2. **Image catalog & cleanup** (SPEC.md §12) — `RunResult.image_ref` already carries build-version-tracked image tags; nothing consumes the growing pile of `qxmx:*`/`llama-cpp-*`/`llapdance/*` tags into a "which ones are actually good" view yet.
+3. Only after those: a 5th engine, multi-GPU expert placement for Arcaine, or an embedded-DB/Prometheus storage adapter — all reasonable, none as urgent as 1-2 above.
 
-1. **`source.mode: build` not supported over SSH yet** — `ssh_docker.py` only does `prebuilt`. Would need the build context transferred to the remote host first (rsync, or some other mechanism) - docker-py's local-tar-upload trick doesn't apply since we're not using docker-py's transport for the SSH adapter.
-2. **Multi-GPU expert/layer placement for Arcaine** — still raw-passthrough only (`LAYER_PLACEMENT`/`EXPERT_PLACEMENT` env vars), `EngineTranslator.build()` only ever resolves one device per backend. Carried forward from last session, unchanged.
-3. **Five (not four) non-corresponding GPU index spaces now confirmed**: clinfo, xpumcli, SYCL/level-zero, DRM render-node, OpenArc/OpenVINO's `GPU.N`, and now `lspci`'s own bare enumeration order too. PCI-bus-id/render-node remain the only reconciled pair.
-4. **No MCP server built yet** — SPEC.md §13 and `cli.py` both note this is needed; `run_suite`/`run_backend` are the operations to wrap when it's built.
-5. Still-standing gaps, unchanged: `llama-benchy` adapter still a stub, no embedded-DB or Prometheus storage adapter, no image-catalog/labeling UI, no web UI (TUI + CLI only), AMD GPU support unimplemented.
+## Open items carried forward (nothing urgent, unchanged unless noted)
+
+- SSH execution target still `prebuilt`-only, no remote build-from-source.
+- GPU index spaces: six non-corresponding numbering schemes now confirmed in practice (clinfo/xpumcli/SYCL-level-zero/DRM-render-node/OpenVINO-GPU.N/xmxmon's own numbering). PCI-bus-id/render-node remain the only reconciled pair; nothing reconciles a telemetry adapter's device number against a backend's actual target device.
+- Multi-GPU expert/layer placement for Arcaine still raw-passthrough only.
+- No embedded-DB or Prometheus storage adapter.
+- No web UI (TUI + CLI + MCP now).
+- AMD GPU support unimplemented.
 
 ## How to pick this up
 
-Read `VALIDATION.md` in full for the detailed writeup (what was tested, what broke, what got fixed, exact commands used). Eight `examples/validation*.suite.yaml` files are now real working references covering four engines, build-from-source, storage fan-out, SSH remote execution, and external/already-loaded backends - copy the closest one rather than starting from `example.suite.yaml`.
+Read `SPEC_REVIEW.md` first for the "are we building the right thing" read, then
+`VALIDATION.md` for the detailed technical writeup of everything tested. Ten
+`examples/validation*.suite.yaml` files are now real working references
+covering four engines, build-from-source, storage fan-out, SSH remote
+execution, external/already-loaded backends, and telemetry - copy the closest
+one rather than starting from `example.suite.yaml`.

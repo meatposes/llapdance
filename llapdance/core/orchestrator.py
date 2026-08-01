@@ -155,6 +155,30 @@ def _vram_preflight(device_indices: list[int], runner: CommandRunner, min_free_m
             )
 
 
+def _run_adapters_with_telemetry(suite: TestSuite, endpoint: str) -> tuple[list, list, list]:
+    """Runs benchmark + coherence adapters bracketed by telemetry
+    start()/stop() (SPEC.md §5 - telemetry is a third concern, distinct
+    from throughput and correctness). Shared by both the normal and
+    external-backend paths - telemetry doesn't care whether there's a
+    container of ours behind the endpoint or not."""
+    started = [
+        (registry.get("telemetry", ref.adapter)(ref.config), ref.config) for ref in suite.telemetry_adapters
+    ]
+    handles = [(adapter, adapter.start(config)) for adapter, config in started]
+
+    benchmarks = [
+        registry.get("benchmark", ref.adapter)(ref.config).run(endpoint, ref.config)
+        for ref in suite.benchmark_adapters
+    ]
+    coherence = [
+        registry.get("coherence", ref.adapter)(ref.config).run(endpoint, ref.config)
+        for ref in suite.coherence_adapters
+    ]
+
+    telemetry = [adapter.stop(handle) for adapter, handle in handles]
+    return benchmarks, coherence, telemetry
+
+
 def _build_storage_adapters(suite: TestSuite) -> list[StorageAdapter]:
     adapters: list[StorageAdapter] = [
         registry.get("storage", "flat-file")({"flat_file_dir": suite.storage.flat_file_dir})
@@ -210,14 +234,7 @@ def run_backend(suite: TestSuite, backend: BackendConfig) -> RunOutcome:
         _wait_until_ready(running.endpoint, backend.health_path, backend.startup_timeout_s)
         _run_post_start_requests(running.endpoint, backend_dict["post_start_requests"])
 
-        benchmarks = [
-            registry.get("benchmark", ref.adapter)(ref.config).run(running.endpoint, ref.config)
-            for ref in suite.benchmark_adapters
-        ]
-        coherence = [
-            registry.get("coherence", ref.adapter)(ref.config).run(running.endpoint, ref.config)
-            for ref in suite.coherence_adapters
-        ]
+        benchmarks, coherence, telemetry = _run_adapters_with_telemetry(suite, running.endpoint)
     finally:
         execution.stop(running)
 
@@ -246,6 +263,7 @@ def run_backend(suite: TestSuite, backend: BackendConfig) -> RunOutcome:
         device_target=_device_target_result(suite, devices),
         benchmarks=benchmarks,
         coherence=coherence,
+        telemetry=telemetry,
     )
 
     previous = storages[0].previous_for(backend.name, limit=1)
@@ -263,15 +281,7 @@ def _run_external_backend(suite: TestSuite, backend: BackendConfig) -> RunOutcom
     `backend.device_note` (unverified, free text) is the only device
     identity captured - see _device_target_result's `verified` flag."""
     running = _ExternalRunningBackend(backend.source.endpoint)
-
-    benchmarks = [
-        registry.get("benchmark", ref.adapter)(ref.config).run(running.endpoint, ref.config)
-        for ref in suite.benchmark_adapters
-    ]
-    coherence = [
-        registry.get("coherence", ref.adapter)(ref.config).run(running.endpoint, ref.config)
-        for ref in suite.coherence_adapters
-    ]
+    benchmarks, coherence, telemetry = _run_adapters_with_telemetry(suite, running.endpoint)
 
     storages = _build_storage_adapters(suite)
     result = RunResult(
@@ -282,6 +292,7 @@ def _run_external_backend(suite: TestSuite, backend: BackendConfig) -> RunOutcom
         device_target={"mode": "external", "verified": False, "note": backend.device_note},
         benchmarks=benchmarks,
         coherence=coherence,
+        telemetry=telemetry,
     )
 
     previous = storages[0].previous_for(backend.name, limit=1)

@@ -1,12 +1,6 @@
-"""CLI entrypoint.
-
-NOTE (future work, not built - see SPEC.md §13): this suite will need an
-MCP integration so agents can push test suites/runs and pull back results
-programmatically, not just human operators via this CLI/the TUI. `run()`
-below is the operation an MCP tool would wrap almost directly - keep that
-in mind if this CLI ever grows business logic that isn't also reachable
-by calling `run_suite()`/`run_backend()` directly, since an MCP layer will
-want to call the orchestrator, not shell out to this CLI.
+"""CLI entrypoint. See `llapdance/mcp/server.py` for the MCP integration
+(SPEC.md §13) - it wraps the same orchestrator functions used here
+(`run_suite`), not this CLI, so the two stay in sync by construction.
 """
 from __future__ import annotations
 
@@ -36,6 +30,8 @@ def run(suite_path: str, overrides: tuple[str, ...]) -> None:
             click.echo(f"  [{bench.adapter}] {bench.metrics}")
         for coh in outcome.result.coherence:
             click.echo(f"  [{coh.adapter}] {coh.passed}/{coh.total} passed")
+        for tel in outcome.result.telemetry:
+            click.echo(f"  [{tel.adapter}] {tel.metrics}")
         if outcome.delta_against:
             click.echo(f"  delta against run {outcome.delta_against.run_id} available")
 
@@ -43,7 +39,7 @@ def run(suite_path: str, overrides: tuple[str, ...]) -> None:
 @main.command()
 def adapters() -> None:
     """List available plugin adapters by kind."""
-    for kind in ("benchmark", "coherence", "storage", "execution"):
+    for kind in ("benchmark", "coherence", "storage", "execution", "engine", "telemetry"):
         click.echo(f"{kind}: {', '.join(available(kind))}")
 
 
@@ -53,6 +49,15 @@ def tui() -> None:
     from llapdance.tui.app import LLAPDanceApp
 
     LLAPDanceApp().run()
+
+
+@main.command()
+def mcp() -> None:
+    """Start the MCP server (stdio transport) so agents can push suites/runs
+    and pull back results programmatically (SPEC.md §13)."""
+    from llapdance.mcp.server import main as mcp_main
+
+    mcp_main()
 
 
 if __name__ == "__main__":
