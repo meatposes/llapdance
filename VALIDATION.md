@@ -181,19 +181,66 @@ End-to-end integration confirmed too, not just the adapter in isolation: ran a r
 
 Added to `SPEC.md` §13 and as a code comment at the top of `llapdance/cli.py`: this suite will need an MCP server surface later so agents (not just human operators via CLI/TUI) can push test suites/runs and pull back results programmatically. Explicitly out of scope for this build pass — the orchestrator's `run_suite`/`run_backend` functions are the operations an MCP layer would wrap, so this should be a thin translation layer on top rather than a redesign when it's built.
 
+## Fifth session — SSH remote target, GPU identity tracking, Arcaine benchmark fix, external/already-loaded backends (2026-08-01, continued)
+
+Follow-up to the overnight session's open items: fix the Arcaine benchmark undercount (#1), track full GPU identity per run (#4), and build a real SSH remote execution target (#5) — plus, raised mid-conversation, a new "test an already-loaded backend, no container lifecycle" mode.
+
+### GPU device identity tracking
+
+`RunResult.device_target` now carries full device identity, not just a bare index: `{"mode", "verified", "devices": [{"index", "vendor", "name", "pci_bus_id", "render_node"}, ...]}`. `verified: true` means this came from actually probing hardware; `verified: false` (external backends, see below) means it's whatever the suite author claimed, never conflated with a real probe result. `execution_target` now also records the real local hostname (`socket.gethostname()`) for local runs, not just `None` — runs on different physical machines are now distinguishable from the stored result alone, not just from context you have to remember.
+
+### Remote hardware probing — Runner abstraction + a real gap found live
+
+`core/probe.py` now threads an explicit `CommandRunner` (LocalRunner or SSHRunner) through every discovery/VRAM function, so probing works identically for a local execution target and a remote one — this is what SPEC.md §7 meant by "probing happens against whichever execution target is active," now actually true rather than aspirational.
+
+Checked screamer (the remote host) directly before writing any code: it has **neither `xpumcli` nor a working host-level OpenCL runtime** (`clinfo` reports 0 platforms — the Intel compute stack there only exists bundled inside container images, not on the bare host, unlike the local box). This meant the existing two-tier discovery (xpumcli → clinfo) would find literally nothing on a real, in-scope host. Added a third tier: **`lspci`-based discovery** — identification only (vendor/model/PCI-bus-id via the PCI-SIG vendor-ID registry, structurally excluding non-Intel/non-NVIDIA chips like screamer's ASPEED server-BMC graphics, not by name-matching a specific chip), no free-VRAM reporting (correctly fails closed, same as ever). `_render_node_for_pci` was also rewritten to resolve via the runner (a small remote shell one-liner) instead of direct local `pathlib` access, so render-node resolution — the one thing that's actually reconciled across GPU index spaces — now works over SSH too.
+
+### SSH execution target — built via raw `ssh`+`docker` CLI, not docker-py's `ssh://` transport
+
+Tried docker-py's native `ssh://` base URL first; its transport module does `import paramiko` unconditionally even in `use_ssh_client=True` mode (shell out to system `ssh`), and offers no clean way to pin a specific identity file short of editing `~/.ssh/config` or relying on ssh-agent state this process has no guarantee persists between tool invocations (confirmed: an agent started and loaded in one Bash call was gone in the next). Rather than fight that, `llapdance/plugins/execution/ssh_docker.py` shells out to `ssh -i <key> ... docker <args>` directly for every operation — more code than the local adapter, but the identity file is used exactly as specified, no side effects on the user's real SSH config or agent state.
+
+**Scoped deliberately**: only `source.mode: prebuilt` is supported remotely — building from source on a remote host would need the build context transferred there first (rsync or similar), out of scope for this pass. A suite wanting to build from source against a remote host should build locally and push to a registry the host can pull from instead.
+
+The orchestrator previously **hardcoded** `"local-docker"` regardless of `suite.execution_target` — a real bug, not just a missing feature: the config schema already had `ExecutionTargetConfig.mode: local|ssh` from an earlier session, but nothing ever read it. Fixed: `_execution_adapter_name()`/`_make_runner()` now actually dispatch on `suite.execution_target.mode`.
+
+### Real validation: stop/test/restore against screamer
+
+Checked screamer directly first (real findings, not assumptions): single Intel Arc Pro B50 (`lspci`: PCI `84:00.0`, `[8086:e212]`), one render node (`renderD128`), and the real production `bonsai` container (`llama-cpp-bonsai:meat6-hardened`, same image tag as the local box) already occupying it. Model files live at `/home/nullraptor/bonsai-models` there (host path differs from the local box, as expected — this is exactly what the harness's `volumes`/`model_path` config exists to make swappable).
+
+Procedure: `docker stop bonsai` on screamer (not removed) → ran `examples/validation-ssh-remote.suite.yaml` (smaller `context_size: 2048`, per the heads-up that this GPU has much less VRAM than the local B70s) through the new SSH execution target → confirmed clean teardown (`docker ps -a` showed no leftover test container) → `docker start bonsai` → confirmed it came back healthy and answering correctly (`12 + 30 = **42**`) on its original port.
+
+Result: **10/10 coherence**, real (and honestly quite slow — `~1.2 tok/s` decode, `~34s` average per request) throughput numbers reflecting genuinely weaker/differently-tuned hardware, not a bug. One operational note: the first attempt hit the local Bash tool's own timeout (not a harness hang) — this GPU is slow enough that 3 benchmark requests + 10 coherence questions took several minutes; a container was left running mid-test as a result of the tool timeout (not the harness — it never reached its own `finally: execution.stop()` because the whole process was killed), cleaned up manually (`docker rm -f`) before retrying with more time budgeted. Worth remembering when running suites against slow/remote hardware: budget wall-clock time generously, and check `docker ps` on the target if a run gets interrupted.
+
+### Arcaine benchmark undercount — real bug, root-caused and fixed
+
+Root cause, found by actually inspecting Arcaine's raw SSE stream (`curl -N` with `stream: true`): Arcaine's **diffusion decoding emits the entire completion as a single SSE chunk**, not one-token-per-chunk like the autoregressive engines (llama.cpp, qxmx). The `generic-http` benchmark adapter's original heuristic — count one non-empty SSE line as one token — assumed autoregressive streaming and undercounted Arcaine's real throughput by roughly 7x (`2.1 tok/s` measured vs. `~13-15 tok/s` real).
+
+Fixed generically, not with an Arcaine special-case: `generic_http.py::_completion_token_count` now parses each SSE chunk as JSON and prefers, in order: the standard OpenAI `usage.completion_tokens` field, then `metrics.new_token` (the convention both Arcaine *and* OpenArc happen to use), then `timings.predicted_n` (llama.cpp's convention), falling back to the old per-line count only if none of those are present anywhere in the stream. Every stored benchmark result now also records `counted_via` so it's always clear which method actually produced a given number, rather than silently trusting a heuristic. Re-validated live across three engines after the fix:
+
+- Arcaine: `2.1 → 14.7 tok/s` (`counted_via: metrics.new_token`) — matches the earlier manual `curl` measurement.
+- llama.cpp: `34.6 tok/s` (`counted_via: timings.predicted_n`) — consistent with prior runs, now via an actually-authoritative field instead of a coincidentally-close line count.
+
+### External/already-loaded backend mode — new capability, requested mid-session
+
+Raised as a good idea while discussing GPU tracking: test a model that's *already running*, with no container of ours to build/start/stop at all. Added `source.mode: external` (`BackendSource.endpoint`, required only for this mode) — `run_backend()` now branches early to `_run_external_backend()`, which skips device resolution, VRAM preflight, and the execution-adapter registry entirely (a dedicated test — `test_external_backend_skips_build_start_stop` — asserts the execution registry is never touched for this path). `BackendConfig.device_note` is free-text, explicitly and permanently `verified: false` in the stored result — never conflated with a real probed `DeviceInfo`.
+
+Also required adding `api_key`/`headers` support to both `generic-http` and `fixed-questions` (neither previously sent any auth header at all) — needed for the real target: the already-loaded `Ternary-Bonsai-27B-Q2_0.gguf` model on this box's GPU1, reached through `llm-proxy` (the user's own separate OpenAI-compatible aggregator project — found its config at `/mnt/ignite/LLM/llm-proxy/config.yaml`, confirmed the exact model id via its own `/v1/models` response rather than guessing the naming convention). Real run (`examples/validation-external.suite.yaml`): **10/10 coherence**, `13.3 tok/s`, confirmed zero containers created (`docker ps -a` before/after identical).
+
 ## Updated adapter status (see README.md, now reflects reality instead of aspiration)
 
 | Adapter | Status |
 |---|---|
 | `local-docker` execution | Real, validated against **four** different engines (llama.cpp, qxmx, Arcaine, OpenArc) on real GPU hardware, plus a real build-from-source run. |
-| `generic-http` benchmark | Real, validated against four different real servers, all producing real TTFT/throughput numbers (though see Arcaine's throughput-undercounting note above). |
-| `fixed-questions` coherence | Real, validated — 10/10 (or a genuine 9/10 model error) across four different working backends. (An earlier draft of this doc claimed it also caught a "tokenizer crash bug" — retracted, see above; that crash was my invalid test setup, not a finding.) |
-| `flat-file` storage | Real, validated — write + delta-lookup both exercised, across all four backends. |
-| `opensearch` storage | **Built and validated.** Real write+query round-trip against a live instance, including catching and fixing a silent timestamp-precision bug (see above). Storage fan-out (flat-file + opensearch simultaneously) confirmed working through a real suite run. |
-| Intel VRAM preflight | Real, validated — `xpumcli`-backed, confirmed to actually reject an impossible VRAM requirement with a real free-memory number, not just documented as a placeholder. |
-| `source.mode: build` | **Built and validated.** Real git clone (not `prebuilt`), real docker build, real run. Found and fixed a real safety gap (uncommitted-changes check before `git checkout`) and built real build-version tracking (git SHA in image tag). |
+| `ssh-docker` execution | **Built and validated.** Real remote host, real stop/test/restore cycle around the host's own production container. `prebuilt` only for now (see above). |
+| `generic-http` benchmark | Real, validated against five different real servers/paths (four engines + external/llm-proxy), all producing real TTFT/throughput numbers. Token-counting bug found and fixed (see below) - now records `counted_via` per request. |
+| `fixed-questions` coherence | Real, validated — 10/10 (or a genuine 9/10 model error) across five different real backends/paths. (An earlier draft of this doc claimed it also caught a "tokenizer crash bug" — retracted, see above; that crash was my invalid test setup, not a finding.) |
+| `flat-file` storage | Real, validated — write + delta-lookup both exercised, across all backends including external mode. |
+| `opensearch` storage | Built and validated (prior session). Real write+query round-trip against a live instance, including catching and fixing a silent timestamp-precision bug. Storage fan-out (flat-file + opensearch simultaneously) confirmed. |
+| Intel VRAM preflight | Real, validated — `xpumcli`-backed where available; correctly falls back to `allow_unknown_vram`-gated fail-closed on a host with no VRAM-capable tooling (screamer). |
+| `source.mode: build` | Built and validated (prior session) locally; explicitly NOT supported yet over SSH (see above). |
+| `source.mode: external` | **Built and validated.** No container lifecycle at all - benchmark/coherence adapters pointed directly at an already-running endpoint (validated via `llm-proxy`). `device_note` is the only device identity captured, explicitly and permanently unverified. |
+| GPU device identity tracking | **Built and validated.** `RunResult.device_target` now carries full `DeviceInfo` (vendor/name/pci_bus_id/render_node) plus a `verified` flag, not just a bare index. Real hostname captured for local runs too. |
 | `llama-benchy` benchmark | Still a stub — unrelated to this validation, no new information. |
-| SSH execution target | Not built. `RunningBackend`/`ExecutionTargetAdapter` contract exercised only locally across four engines; nothing contradicts it working remotely, but it's unverified. |
 | Embedded-DB / Prometheus storage | Not built. |
 | MCP integration | Noted in SPEC.md §13 and `cli.py` as explicit future work. Not built. |
-| `params.shared` → per-engine `command`/`env`/`devices`/`post_start_requests` translation | **Built and validated against four engines.** `EngineTranslator` plugin kind + `llama-cpp-sycl`/`qxmx`/`arcaine`/`openarc` reference implementations. `post_start_requests` (new this session) covers engines where model-loading is a separate step from container start. Raw passthrough remains available for anything a translator doesn't cover. |
+| `params.shared` → per-engine `command`/`env`/`devices`/`post_start_requests` translation | Built and validated against four engines (prior session). Raw passthrough remains available for anything a translator doesn't cover. |

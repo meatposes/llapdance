@@ -1,0 +1,45 @@
+# Validates source.mode: external - testing a backend that's already
+# loaded, no container of ours built/started/stopped at all. Hits the
+# already-running production llama-cpp-bonsai model through llm-proxy
+# (an OpenAI-compatible aggregator, a separate project of the user's - the
+# spec deliberately never names it, this is deployer-side config) rather
+# than the container directly. See VALIDATION.md "external backend mode"
+# section.
+#
+# SECURITY NOTE: api_key below is a placeholder - this file is committed.
+# Supply the real key via --set at run time, same pattern as
+# validation-opensearch.suite.yaml's password.
+name: validation-external
+
+backends:
+  - name: bonsai-via-llm-proxy
+    source:
+      mode: external
+      endpoint: "http://localhost:8000"
+    model: "Ternary-Bonsai-27B-Q2_0.gguf@172.18.0.1"
+    # Purely informational - there is no container of ours to probe here,
+    # this is NOT verified against real hardware the way a probed
+    # DeviceInfo is (see RunResult.device_target's "verified" flag).
+    device_note: "GPU1 (this server), Ternary Bonsai already loaded, reached via llm-proxy"
+
+# no device_target / execution_target / min_free_vram_mb needed - this
+# backend has no lifecycle of ours to manage at all.
+
+benchmark_adapters:
+  - adapter: generic-http
+    config:
+      api_key: "CHANGE_ME"
+      model: "Ternary-Bonsai-27B-Q2_0.gguf@172.18.0.1"
+      prompt: "In one sentence, what is a hash table?"
+      max_tokens: 64
+      num_requests: 3
+
+coherence_adapters:
+  - adapter: fixed-questions
+    config:
+      api_key: "CHANGE_ME"
+      model: "Ternary-Bonsai-27B-Q2_0.gguf@172.18.0.1"
+
+storage:
+  flat_file_dir: "./results"
+  extra_adapters: []

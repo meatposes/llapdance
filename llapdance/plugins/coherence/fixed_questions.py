@@ -47,12 +47,14 @@ class FixedQuestionCoherence(CoherenceAdapter):
             else None
         )
 
+        headers = {"Authorization": f"Bearer {cfg['api_key']}"} if "api_key" in cfg else cfg.get("headers", {})
+
         passed = 0
         graded_by_match = 0
         graded_by_llm_judge = 0
         failures: list[dict[str, Any]] = []
 
-        with httpx.Client(timeout=60) as client:
+        with httpx.Client(timeout=60, headers=headers) as client:
             for q in questions:
                 answer = self._ask(client, endpoint, model, q["prompt"])
                 lowered = answer.lower()

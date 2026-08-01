@@ -1,0 +1,63 @@
+# Validates execution_target.mode: ssh for real - real remote host
+# ("screamer"), a single Intel Arc Pro B50 (much less VRAM than the local
+# box's B70s, hence the smaller context_size below). See VALIDATION.md
+# "SSH remote execution target" section.
+#
+# The host's real production `bonsai` container occupies its only GPU, so
+# this suite is meant to be run only after stopping that container (and
+# restarted afterward) - see the accompanying manual steps in
+# VALIDATION.md, not automated by this suite itself.
+name: validation-ssh-remote
+
+backends:
+  - name: bonsai-ssh-validation
+    source:
+      mode: prebuilt
+      image: "llama-cpp-bonsai:meat6-hardened"   # already present on screamer
+    model: "Ternary-Bonsai-27B-Q2_0"
+    model_path: "/models/Ternary-Bonsai-27B-Q2_0.gguf"
+    engine: "llama-cpp-sycl"
+    port: 8080
+    volumes:
+      /home/nullraptor/bonsai-models: /models
+    params:
+      shared:
+        context_size: 2048   # screamer's B50 has much less VRAM than the local B70s - smaller context
+        reasoning: "off"     # required for this model, see VALIDATION.md
+    devices:
+      - "/dev/dri/renderD128:/dev/dri/renderD128"   # screamer's only render node (single GPU host)
+    health_path: "/v1/models"
+    startup_timeout_s: 180
+    network:
+      mode: disabled
+
+# screamer has no xpumcli and no working OpenCL runtime at the host level
+# (clinfo reports 0 platforms - confirmed live) - device discovery there
+# falls back to lspci (identification only, no free-VRAM reporting).
+# device_target: none, since the GPU is pinned directly via `devices`
+# above (single-GPU host, no ambiguity) rather than resolved by index -
+# avoids needing allow_unknown_vram for a preflight check that can't get
+# real numbers on this host anyway.
+device_target:
+  mode: none
+
+execution_target:
+  mode: ssh
+  host: "screamer"
+  user: "nullraptor"
+  ssh_key_path: "/home/nullraptor/.ssh/id_nullraptor"
+
+benchmark_adapters:
+  - adapter: generic-http
+    config:
+      prompt: "In one sentence, what is a hash table?"
+      max_tokens: 64
+      num_requests: 3
+
+coherence_adapters:
+  - adapter: fixed-questions
+    config: {}
+
+storage:
+  flat_file_dir: "./results"
+  extra_adapters: []
