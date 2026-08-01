@@ -4,7 +4,17 @@ Live document — updated as work progresses. See VALIDATION.md for the full
 writeup and SPEC_REVIEW.md for the "are we still on track" assessment (now
 partly resolved - see its update note at the top).
 
-## Session complete (2026-08-01, continued) — TUI rebuild after direct "unusable" feedback
+## Session complete (2026-08-01, continued) — TUI still wasn't clear, second usability pass
+
+Direct follow-up: even the rebuilt TUI "wasn't clear." Found a real, embarrassing gap - `screens.py` `import`ed `Button` and never placed one anywhere; the whole interaction relied on tiny Footer keybinding text, plus a blank image field with no discovery.
+
+- [x] Added real visible buttons to all 3 screens (alongside existing keybindings) + numbered step banners ("Step 1 of 3" etc.).
+- [x] Replaced the blank image `Input` with a real `Select` populated from `catalog.list_images()` - pick from what's actually on the machine.
+- [x] Found and fixed a real CSS layout bug via a genuine button-click pilot test (not just calling action methods): `Input`/`Select` default `width: 100%` pushed buttons off-screen entirely. Fixed with real CSS constraints.
+- [x] Validated live end to end, driven entirely by real `pilot.click()` calls: scan → configure → real image auto-fill → generate → run → live progress → clean PASS (88.9 tok/s, 10/10) → back navigation. Clean teardown confirmed.
+- [x] 2 new click-driven tests, 131 passing total, committed.
+
+## Prior session (2026-08-01, continued) — TUI rebuild after direct "unusable" feedback
 
 Read the original 74-line TUI and confirmed every specific complaint against the actual code: raw file paths with no info, no way to test an arbitrary model without hand-writing YAML first, no model/engine discovery, no live progress (orchestrator had zero logging/callbacks of any kind), a raw Python dict dumped only after the whole suite finished.
 
