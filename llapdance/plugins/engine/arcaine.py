@@ -50,6 +50,53 @@ class ArcaineEngine(EngineTranslator):
         "expert_placement": {"type": "str", "maps_to": "EXPERT_PLACEMENT env", "note": "see layer_placement"},
     }
 
+    # Real runtime env flags for the validated model family (diffusion_gemma
+    # - src/modeling/diffusion_gemma/), found by reading Arcaine's own
+    # source. Arcaine IS a from-scratch engine (own modeling/gpu code, not
+    # vendored ggml-sycl) but DOES link oneDNN (CMakeLists.txt:
+    # find_package(dnnl CONFIG REQUIRED)) - unlike llama.cpp's GGML_SYCL_DNNL
+    # (a build-time cmake flag), Arcaine's oneDNN attention path is a
+    # RUNTIME toggle: DIFF_ONEDNN_SDPA unset/"off"/"0"/"false"/"no" (any
+    # case) disables it; any other value enables oneDNN-backed
+    # scaled-dot-product-attention and is passed through as an
+    # implementation-variant string (exact valid non-empty values not
+    # enumerated here - not fully characterized this session).
+    #
+    # Also found: a separate Qwen3.5 model family (src/modeling/qwen3_5*/,
+    # ARCAINE_QWEN35_* / ARCAINE_QWEN_MAX_LAYERS env vars, ~15 flags) that
+    # this harness has NOT validated against (only diffusion_gemma has been
+    # tested here) - deliberately not cataloged below; read
+    # src/modeling/qwen3_5/ and src/modeling/qwen3_5_moe/ directly before
+    # relying on any of those if that model family gets validated later.
+    known_env_flags = {
+        "DIFF_ONEDNN_SDPA": {
+            "type": "str",
+            "note": "unset or 'off'/'0'/'false'/'no' (any case) = oneDNN SDPA disabled (the default); "
+            "any other value = enabled, value passed through as an implementation-variant selector "
+            "(exact valid values not enumerated this session) - src/modeling/diffusion_gemma/attention.cpp",
+        },
+        "DIFF_ARENA": {
+            "type": "str", "default": "on (pooled)",
+            "note": "'off'/'0'/'false'/'no' drops to non-pooled allocation (fresh sycl::malloc_device "
+            "per alloc, freed on scope exit) - the pre-pool A/B baseline. See DISABLE_SCRATCH.",
+        },
+        "DISABLE_SCRATCH": {
+            "type": "str", "note": "'1'/'true'/'TRUE'/'yes' has the same effect as DIFF_ARENA=off - two "
+            "env vars control the same allocator toggle",
+        },
+        "DIFF_PREFILL_CHUNK": {"type": "int", "default": 2048, "note": "<=0 disables chunking - bounds activation storage for long prompts"},
+        "DIFF_FORCE_DENOISE_STEPS": {"type": "presence", "note": "skips the normal early-stop loop-break logic, forces the full step count"},
+        "DIFF_HOST_SAMPLER": {"type": "presence", "note": "use the original fully host-side sampler instead of the device sampler path"},
+    }
+    # NVFP4-quant-specific flags exist too (DIFF_NVFP4_* - ~13 flags,
+    # directly relevant since the validated model IS NVFP4-quantized) and
+    # MoE-specific flags (DIFF_MOE_STATS, DIFF_MOE_TAIL_CAP) - found but not
+    # individually characterized this session (each needs its own context
+    # read, like DIFF_ONEDNN_SDPA above, to document honestly rather than
+    # guess at valid values/defaults). Read src/modeling/diffusion_gemma/
+    # (attention_kernels.hpp, moe.cpp, fusions/int4_awq.hpp) directly before
+    # sweeping any of them.
+
     def build(self, model_path: str, params: dict[str, Any], port: int, device: DeviceInfo | None) -> EngineInvocation:
         context_size = params.get("context_size", 4096)
         max_tokens = params.get("max_tokens", 2048)
