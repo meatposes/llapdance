@@ -586,6 +586,24 @@ Fixed all three screens with real, visible, clickable buttons alongside the exis
 
 **Validated live end to end, driven entirely by real `pilot.click()` calls on the actual button widgets** (not by calling `action_*` methods directly, which would have proven the logic but not the actual clickability): scan → click Configure → real image auto-fills from `arcaine-server:qwen35fix` (a real local image) → click Generate → click Run → real progress log through every stage → clean `PASS`, 88.9 tok/s, 10/10 coherence, delta shown against the prior run → click Back → lands on `BuildScreen` as expected. Clean teardown confirmed via `docker ps -a`. 2 new tests exercise real clicks (`pilot.click("#scan-btn")` etc., not action-method calls) - 131 passing total.
 
+## Twenty-third session — test-by-model vs test-by-backend, and real sweep support in the TUI (2026-08-01, continued)
+
+Direct request: a screen to test by model, a screen to test by backend, and a way to sweep from the TUI.
+
+### `HomeScreen` + `BackendBrowserScreen` - two real entry points
+
+Added `HomeScreen` (two buttons: "Test by model" / "Test by backend") as the new app entry point. "Test by model" is the existing flow unchanged. "Test by backend" is new (`BackendBrowserScreen`): pick a real registered engine first - its real sweepable params + known env flags shown immediately via `describe_engine()` (the same info `llapdance describe-engine` prints) - then a model table sorted compatible-first (`engine in m.compatible_engines`), so "what can I throw at OpenArc" is answerable without already knowing which models qualify. Both paths converge on the same `BuildScreen`, extended with an optional `preselected_engine` so "test by backend" doesn't lose the engine choice already made.
+
+### Real sweep control in `BuildScreen`
+
+A `sweep-param` `Select` populated from the chosen engine's real `describe_engine()` output (`params.shared.<key>` for each declared param, `env.<key>` for each known env flag - not a static list, changes per engine) plus a comma-separated `sweep-values` `Input`. `action_generate()` writes a real `sweep: [{param, values}]` block into the backend config - the actual `BackendConfig.sweep` mechanism (SPEC.md §10, `llapdance/config/sweep.py`), not a TUI-only concept; the generated YAML is the same shape a hand-written sweep suite would use. Values are coerced to int/float where they genuinely parse as one (`_coerce_sweep_value`) so e.g. `context_size` sweeps as real integers, not numeric-looking strings.
+
+**Real validation gotcha, not a bug**: first live attempt tried sweeping `params.shared.context_size` against `openarc` and Textual's own `Select` raised `InvalidSelectValueError: Illegal select value` - correct, since `openarc`'s translator genuinely doesn't declare `context_size` as sweepable (confirmed in an earlier session: OpenArc's real tuning surface is `runtime_config`, not a scalar `context_size`). The dropdown was doing exactly what it should - only offering params real for the selected engine. Retried with `qxmx` (which does have one) instead of chasing a nonexistent bug.
+
+**Validated live end to end**: `qxmx` + `Ternary-Bonsai-27B-Q2_0.gguf`, sweeping `params.shared.context_size` across `[2048, 4096]`. Real sweep options list confirmed (17 real params/env flags for qxmx). Generated YAML had a correct `sweep:` block; status message correctly said "expand into 2 real runs". `RunScreen`'s summary showed **two distinct real results**, correctly named by the sweep-expansion convention (`ternary-bonsai-27b-q2-0--context_size_2048` / `--context_size_4096`), both clean `PASS`, both 10/10 coherence, real distinct benchmark numbers (22.80 vs 22.87 tok/s). Clean teardown confirmed via `docker ps -a`.
+
+7 new tests (`HomeScreen` button navigation ×2, `BackendBrowserScreen` compatibility marking + engine handoff to `BuildScreen`, sweep-value coercion, real sweep-axis generation), 136 passing total.
+
 ## Updated adapter status (see README.md, now reflects reality instead of aspiration)
 
 | Adapter | Status |

@@ -4,7 +4,17 @@ Live document — updated as work progresses. See VALIDATION.md for the full
 writeup and SPEC_REVIEW.md for the "are we still on track" assessment (now
 partly resolved - see its update note at the top).
 
-## Session complete (2026-08-01, continued) — TUI still wasn't clear, second usability pass
+## Session complete (2026-08-01, continued) — test-by-model vs test-by-backend, real sweep support in the TUI
+
+Direct request: a screen to test by model, a screen to test by backend, and a way to sweep from the TUI.
+
+- [x] `HomeScreen` (new entry point) offers both: "Test by model" (existing flow) and "Test by backend" (new `BackendBrowserScreen` - pick a real engine first, see its real sweepable params/env flags immediately, then a model table sorted compatible-first). Both converge on `BuildScreen` (now takes an optional `preselected_engine`).
+- [x] Real sweep control on `BuildScreen`: a param dropdown built from the chosen engine's actual `describe_engine()` output (changes per engine) + comma-separated values, writing a real `sweep:` block (the actual `BackendConfig.sweep` mechanism, not a TUI-only concept).
+- [x] First live sweep attempt (openarc + context_size) correctly failed - Textual's own Select validation caught that openarc genuinely has no sweepable context_size (real per-engine correctness, not a bug). Retried with qxmx (which does).
+- [x] Validated live end to end: qxmx sweep across 2 context_size values produced 2 real distinct PASS results (10/10 coherence each, real distinct tok/s numbers), correctly named by the sweep-expansion convention. Clean teardown.
+- [x] 7 new tests, 136 passing, committed.
+
+## Prior session (2026-08-01, continued) — TUI still wasn't clear, second usability pass
 
 Direct follow-up: even the rebuilt TUI "wasn't clear." Found a real, embarrassing gap - `screens.py` `import`ed `Button` and never placed one anywhere; the whole interaction relied on tiny Footer keybinding text, plus a blank image field with no discovery.
 
