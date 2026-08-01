@@ -4,7 +4,16 @@ Live document — updated as work progresses. See VALIDATION.md for the full
 writeup and SPEC_REVIEW.md for the "are we still on track" assessment (now
 partly resolved - see its update note at the top).
 
-## Session complete (2026-08-01, continued) — sweep automation, image catalog, model catalog
+## Session complete (2026-08-01, continued) — real Qwen3.5 sweep, stale-image bug found+fixed
+
+Direct request: find a real local Qwen3.5/3.6 model Arcaine supports, sweep for optimal flags.
+
+- [x] Found the real model (`unsloth/Qwen3.6-27B-NVFP4`, `config.json` `model_type: "qwen3_5"` matches Arcaine's dispatch exactly) and cataloged all 13 real `ARCAINE_QWEN35_*` env flags by reading every `getenv()` site.
+- [x] **Real bug found and fixed**: `arcaine-server:latest` predates Arcaine commit `f6724df` (a KV-cache/recurrent-state reset fix) — every 2nd+ sequential request against any Qwen3.5 model 500s (`"Qwen3.5 KV cache position mismatch"`), and without the crash, the linear-attention layers would silently carry over the previous request's state instead. Rebuilt from current HEAD as `arcaine-server:qwen35fix`, validated live (5/5 sequential requests OK). Recipe saved as `examples/Dockerfile.arcaine-server-rebuild` since the original build file isn't tracked in `~/Arcaine` at all.
+- [x] **Ran the real sweep** (`env.ARCAINE_QWEN35_NVFP4_DPAS` = `["0","1"]`) against the fixed image. Result: **refutes the source's own performance comment** — `DPAS=1` (oneDNN BMG f4 path) was both slower (9.90 vs 10.16 tok/s) and measurably less correct (5/10 vs 9/10 fixed-questions, including wrong basic arithmetic) than the `DPAS=0` default. See VALIDATION.md "Tenth session" for full numbers and failure examples.
+- [x] Full test suite green (98 passed), committed.
+
+## Prior session (2026-08-01, continued) — sweep automation, image catalog, model catalog
 
 Direct follow-up to SPEC_REVIEW.md's top recommendation:
 

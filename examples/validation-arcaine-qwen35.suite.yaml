@@ -1,0 +1,70 @@
+# Real sweep validating the ARCAINE_QWEN35_NVFP4_DPAS claim (see
+# arcaine.py known_env_flags + VALIDATION.md "Qwen3.5 sweep" section):
+# source comment says oneDNN's BMG f4 path is "materially faster for
+# both M=1 decode and large-M prefill on this checkpoint" than the
+# default dense Xe2 kernel, yet defaults OFF. This suite runs the same
+# real model with the flag off then on and compares generic-http
+# throughput + fixed-questions coherence.
+name: validation-arcaine-qwen35
+
+backends:
+  - name: arcaine-qwen35-sweep
+    source:
+      mode: prebuilt
+      # NOT arcaine-server:latest - that image predates commit f6724df
+      # ("qwen3_5: invalidate the mixer caches when a new sequence starts"),
+      # confirmed via `docker inspect --format '{{.Created}}'` (built
+      # 2026-07-26 05:45 UTC vs the fix's 18:00 UTC) and reproduced live: the
+      # 2nd sequential request against Qwen3.5 always 500s with "KV cache
+      # position mismatch". qwen35fix = rebuilt from current Arcaine HEAD, see
+      # examples/Dockerfile.arcaine-server-rebuild and VALIDATION.md.
+      image: "arcaine-server:qwen35fix"
+    model: "Qwen3.6-27B-NVFP4"
+    model_path: "/models/qwen35"   # in-container path, see volumes below
+    engine: "arcaine"
+    port: 7462
+    volumes:
+      /mnt/ignite/LLM/models/unsloth/Qwen3.6-27B-NVFP4: /models/qwen35
+    params:
+      shared:
+        context_size: 4096
+      backend_specific:
+        served_model_name: "Qwen3.6-27B-NVFP4"
+    env:
+      ARCAINE_QWEN35_NVFP4_DPAS: "0"   # overridden per sweep combination below
+    # GOTCHA: Arcaine's image has no /health endpoint at all (confirmed
+    # via a live container - 404). /v1/models is the real readiness signal.
+    health_path: "/v1/models"
+    startup_timeout_s: 180
+    network:
+      mode: disabled
+    sweep:
+      - param: "env.ARCAINE_QWEN35_NVFP4_DPAS"
+        values: ["0", "1"]
+
+device_target:
+  mode: indices
+  indices: [3]   # same idle B70 (PCI 0000:8a:00.0) used for every backend validated so far
+
+execution_target:
+  mode: local
+
+benchmark_adapters:
+  - adapter: generic-http
+    config:
+      model: "Qwen3.6-27B-NVFP4"   # must match SERVED_MODEL_NAME above
+      prompt: "In one sentence, what is a hash table?"
+      max_tokens: 64
+      num_requests: 3
+
+coherence_adapters:
+  - adapter: fixed-questions
+    config:
+      model: "Qwen3.6-27B-NVFP4"
+
+storage:
+  flat_file_dir: "./results"
+  extra_adapters: []
+
+min_free_vram_mb: 4096
+allow_unknown_vram: false

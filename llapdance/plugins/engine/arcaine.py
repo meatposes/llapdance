@@ -62,13 +62,42 @@ class ArcaineEngine(EngineTranslator):
     # implementation-variant string (exact valid non-empty values not
     # enumerated here - not fully characterized this session).
     #
-    # Also found: a separate Qwen3.5 model family (src/modeling/qwen3_5*/,
-    # ARCAINE_QWEN35_* / ARCAINE_QWEN_MAX_LAYERS env vars, ~15 flags) that
-    # this harness has NOT validated against (only diffusion_gemma has been
-    # tested here) - deliberately not cataloged below; read
-    # src/modeling/qwen3_5/ and src/modeling/qwen3_5_moe/ directly before
-    # relying on any of those if that model family gets validated later.
+    # Qwen3.5 model family (src/modeling/qwen3_5/, dispatched via
+    # config.json's model_type=="qwen3_5" - confirmed real local model:
+    # unsloth/Qwen3.6-27B-NVFP4) - real flags found by reading every
+    # getenv() site in src/modeling/qwen3_5/*.{cpp,hpp}, validated live
+    # (see VALIDATION.md "Qwen3.5 sweep" section). The Qwen3.5_MoE variant
+    # (config.json model_type=="qwen3_5_moe_text") and its own env vars are
+    # still NOT validated/cataloged - a real local model exists
+    # (AEON-7/Ornith-1.0-35B-...-NVFP4) but its config.json says
+    # "qwen3_5_moe" (missing "_text"), which arcaine_server.cpp's dispatch
+    # comment implies won't match - untested, don't assume it loads.
     known_env_flags = {
+        "ARCAINE_QWEN35_NVFP4_DPAS": {
+            "type": "bool (unset/'0'/'off'/'false'/'no' = disabled)", "default": False,
+            "note": "REAL FINDING, validated live against unsloth/Qwen3.6-27B-NVFP4 (see VALIDATION.md "
+            "'Qwen3.5 sweep' section): the source comment claims oneDNN's BMG f4 path is 'materially "
+            "faster for both M=1 decode and large-M prefill on this checkpoint' than the default dense "
+            "Xe2 kernel - the live A/B sweep refutes this. DPAS=1 was BOTH slower (9.90 vs 10.16 tok/s, "
+            "718ms vs 523ms TTFT) AND measurably less correct (5/10 vs 9/10 fixed-questions, including "
+            "wrong basic arithmetic) than the DPAS=0 default. Leave this unset.",
+        },
+        "ARCAINE_QWEN35_ATTENTION_KERNEL": {
+            "type": "str", "values": ["xmx", "subgroup", "baseline", "by-phase"], "default": "auto (unset)",
+            "note": "explicit attention kernel selection, overriding auto-detection",
+        },
+        "ARCAINE_QWEN35_ESIMD_DELTA": {"type": "bool", "default": True, "note": "ESIMD DeltaNet recurrent-state path (exact at BF16); disabling falls back to scalar/SIMT baseline"},
+        "ARCAINE_QWEN35_FUSED_ESIMD_DELTA_DECODE": {"type": "bool", "default": True},
+        "ARCAINE_QWEN35_FUSED_BA_PROJECTION": {"type": "bool", "default": True},
+        "ARCAINE_QWEN35_FUSED_PROJECTIONS": {"type": "bool", "default": True},
+        "ARCAINE_QWEN35_PERSISTENT_IO": {"type": "bool", "default": True},
+        "ARCAINE_QWEN35_PREFILL_DEQUANT_BF16": {"type": "bool", "default": True},
+        "ARCAINE_QWEN35_DEQUANT_BF16_MAX_MB": {"type": "int", "default": 512, "note": "megabytes"},
+        "ARCAINE_QWEN35_DEQUANT_BF16_MIN_M": {"type": "int", "default": 256},
+        "ARCAINE_QWEN35_DECODE_ATTN_CHUNK": {"type": "int", "default": 128},
+        "ARCAINE_QWEN35_MAX_LAYERS": {"type": "int", "note": "truncate to N layers - debug/testing, not a perf switch"},
+        "ARCAINE_QWEN35_MTP_ACCEPTANCE": {"type": "bool", "default": False, "note": "multi-token-prediction acceptance reporting"},
+        # Diffusion Gemma family (src/modeling/diffusion_gemma/), the other validated model family:
         "DIFF_ONEDNN_SDPA": {
             "type": "str",
             "note": "unset or 'off'/'0'/'false'/'no' (any case) = oneDNN SDPA disabled (the default); "

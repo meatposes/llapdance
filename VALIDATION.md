@@ -322,6 +322,47 @@ Different shape entirely: OpenArc has no GGML/oneDNN-style env flags — its rea
 
 **Validated live**: ran the real OpenArc suite with `params.backend_specific.runtime_config = {"PERFORMANCE_HINT": "THROUGHPUT"}` set via `--set` — model loaded successfully (OpenArc's own API would have rejected an invalid property), 10/10 coherence, real benchmark numbers (71 tok/s on the 4B int4 model). Confirms the plumbing works end-to-end against the real API, not just structurally.
 
+## Tenth session — real Qwen3.5 sweep, a stale-image bug found and fixed (2026-08-01, continued)
+
+Direct request: find a real local Qwen3.5/3.6 model Arcaine supports, sweep it for optimal flags.
+
+### Model chosen
+
+Cross-referenced `arcaine_server.cpp`'s dispatch comment (`config.json` `model_type=="qwen3_5"` -> `Qwen35Model`, dense AR) against real local `config.json` files. `/mnt/ignite/LLM/models/unsloth/Qwen3.6-27B-NVFP4` matches exactly (`architectures: ["Qwen3_5ForConditionalGeneration"]`, `model_type: "qwen3_5"`). Flagged and skipped a near-miss: `AEON-7/Ornith-1.0-35B-...-NVFP4`'s `config.json` says `model_type: "qwen3_5_moe"` (missing the `_text` suffix the dispatch checks for) — untested, don't assume it loads.
+
+### Cataloged the real `ARCAINE_QWEN35_*` flags (13 of them)
+
+Read every `getenv()` call site in `~/Arcaine/src/modeling/qwen3_5/*.{cpp,hpp}` — added to `arcaine.py`'s `known_env_flags` alongside the existing `diffusion_gemma` entries. Central one: **`ARCAINE_QWEN35_NVFP4_DPAS`**, default OFF (dense Xe2 kernel), with the source's own comment claiming oneDNN's BMG f4 path is "materially faster for both M=1 decode and large-M prefill on this checkpoint." That claim, being concrete and testable, became the real sweep target — see below for why it turned out to be false on this checkpoint.
+
+### Real bug found: the deployed image predates a KV-cache-reset fix
+
+First sweep attempt (`arcaine-server:latest`) crashed on the very first coherence question after one successful benchmark request: `HTTP 500 "Qwen3.5 KV cache position mismatch"`. Reproduced manually outside the harness (bypassing the sweep) to isolate it: request #1 to a fresh container succeeds every time, request #2 (any new, unrelated prompt) always 500s.
+
+Root-caused via `docker inspect --format '{{.Created}}'` vs `git log`: `arcaine-server:latest` was built **2026-07-26 05:45 UTC**; Arcaine commit `f6724df` ("qwen3_5: invalidate the mixer caches when a new sequence starts") landed **2026-07-26 18:00 UTC** — the deployed image is ~12 hours stale relative to the current source, and is missing exactly the fix for this bug. The commit's own message is worth quoting because it's a real, more-severe hazard than the visible crash: *"the only reset_cache() caller is arcaine_mbench, so arcaine_server and main.cpp never reset between requests... For the linear-attention layers [the missing reset] is silent. conv_state and recurrent_state are inputs to the delta rule, not a window that refills, so every request after the first would start 48 of 64 layers from the previous request's running summary and produce plausible, wrong output."* I.e. without this fix, a server that *didn't* crash on request #2 would have been silently corrupting 48/64 layers' state instead — the crash is the loud half of the bug.
+
+**Also found**: no `Dockerfile.server` (or `server-entrypoint.sh`) exists anywhere in the `~/Arcaine` repo or its git history — the deployed image's actual build recipe is untracked. Reconstructed it from `docker history arcaine-server:latest --no-trunc` (every `RUN`/`COPY`/`ARG` layer is visible verbatim) and extracted the baked-in `server-entrypoint.sh` directly from the running image (`docker run --rm --entrypoint cat ... /usr/local/bin/server-entrypoint.sh`). Saved as `examples/Dockerfile.arcaine-server-rebuild` so this reconstruction doesn't have to happen again.
+
+**Second gotcha while rebuilding**: `~/Arcaine/build/` is gitignored but there's no `.dockerignore`, so the stale host-side `build/` directory (leftover `CMakeCache.txt` pointing at a different original path, `/workspace/build313`) got copied into the image by `COPY . .` and collided with a fresh `cmake -B` configure (`CMake Error: ... different than the directory /workspace/build313 where CMakeCache.txt was created`). Fixed with `rm -rf /workspace/build` before configuring — see the Dockerfile.
+
+Rebuilt from `arcaine:onednn313` (a pre-existing dev image with oneDNN already compiled from source, confirmed via `docker run --entrypoint sh` probing `/opt/onednn/lib` and `which cmake ninja icpx`) — reusing it meant only the `arcaine_server` C++ target needed recompiling, ~23s, not a full oneDNN-from-source rebuild. Tagged `arcaine-server:qwen35fix`. **Validated the fix live**: 5 sequential requests against the same container, all `200`, no crash — confirmed the fix actually lands in the rebuilt binary.
+
+### The real sweep result — and it refutes the source comment
+
+Ran `examples/validation-arcaine-qwen35.suite.yaml` (`env.ARCAINE_QWEN35_NVFP4_DPAS` swept `["0", "1"]`) against `arcaine-server:qwen35fix`. Both runs completed cleanly, clean teardown confirmed (`docker ps -a`).
+
+| | `DPAS=0` (dense Xe2, the default) | `DPAS=1` (oneDNN BMG f4) |
+|---|---|---|
+| avg TTFT | 523 ms | 718 ms |
+| avg total | 2921 ms | 3621 ms |
+| avg tokens/sec | 10.16 | 9.90 |
+| coherence | 9/10 (1 empty answer, not a wrong one) | **5/10** |
+
+`DPAS=1`'s wrong answers were not borderline: `12 + 30` → "43", `'cat'` backwards → "t", "roses are red, violets are ___" → "purple", `9 * 9` → "9", first month of the year → empty. These are simple, unambiguous questions the same model gets right at `DPAS=0`.
+
+**This directly refutes the source code's own comment.** On this real checkpoint, the oneDNN BMG f4 path (`ARCAINE_QWEN35_NVFP4_DPAS=1`) is both *slower* (higher TTFT, higher total time, lower tok/s) and *measurably less correct* (half the fixed questions wrong, including basic arithmetic) than the dense Xe2 kernel that ships as the default. The empirical "optimal flags" finding for `unsloth/Qwen3.6-27B-NVFP4` is: **leave `ARCAINE_QWEN35_NVFP4_DPAS` unset (off)** — the default is already correct, and the alternative path the comment recommends is worse on both axes tested. This is a single run per config (n=1, not averaged/repeated) — the throughput gap is modest and could use a repeat to firm up, but the coherence gap (9/10 vs 5/10, with genuinely wrong arithmetic) is large enough not to be sampling noise.
+
+Fixed an overclaim caught before this was actually run: `known_env_flags`'s note on this flag briefly said "validated live: the comment was correct" before the sweep had executed — corrected to state the hypothesis neutrally, now updated again to record the real (opposite) result.
+
 ## Updated adapter status (see README.md, now reflects reality instead of aspiration)
 
 | Adapter | Status |
