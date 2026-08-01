@@ -60,6 +60,40 @@ class LlamaCppSyclEngine(EngineTranslator):
         "reasoning": {"type": "str", "values": ["on", "off", "auto"], "default": "auto", "maps_to": "LLAMA_ARG_REASONING env"},
     }
 
+    # Raw GGML/SYCL runtime env flags, NOT read by this translator - swept
+    # directly via `env.<NAME>` on the backend config (validated live: a
+    # real 2-value sweep of GGML_OP_OFFLOAD_MIN_BATCH landed correctly
+    # inside a real running container, confirmed via `docker exec`).
+    # Found by reading ggml-sycl's actual source (getenv() call sites),
+    # not guessed at - not an exhaustive list of every GGML_* flag that
+    # exists, just the ones confirmed real this way.
+    known_env_flags = {
+        "GGML_SYCL_NO_PINNED": {
+            "type": "presence (any non-empty value disables pinned host memory)",
+            "source": "ggml/src/ggml-sycl/common.cpp, ggml-sycl.cpp: getenv(...) != nullptr",
+        },
+        "GGML_OP_OFFLOAD_MIN_BATCH": {
+            "type": "int", "default": 32,
+            "source": "ggml/src/ggml-sycl/ggml-sycl.cpp: atoi(getenv(...))",
+        },
+        "GGML_SYCL_VISIBLE_DEVICES": {
+            "type": "str (device index)",
+            "note": "NOT set by this translator (render-node passthrough is used for GPU pinning "
+            "instead, see module docstring) - listed here only because it's a real flag this "
+            "backend's binary reads, in case a suite needs to set it directly via raw env passthrough.",
+        },
+    }
+    # GGML_SYCL_DNNL (whether oneDNN kernels are linked in at all, e.g. for
+    # flash-attention) is a BUILD-TIME cmake option (`-DGGML_SYCL_DNNL=0|1`,
+    # ggml/src/ggml-sycl/CMakeLists.txt), not a runtime env var - sweeping
+    # it means sweeping `source.build.build_args.GGML_SYCL_DNNL` with
+    # `source.mode: build`, which triggers a real rebuild per value rather
+    # than just a container restart. Structurally supported by the same
+    # generic dotted-path sweep mechanism (build_args is just another dict
+    # on the backend config) - NOT validated live this session (a from-
+    # source oneDNN build is a real, slow rebuild, not a quick check) - do
+    # that validation before relying on it for something that matters.
+
     def build(self, model_path: str, params: dict[str, Any], port: int, device: DeviceInfo | None) -> EngineInvocation:
         context_size = params.get("context_size", 4096)
         batch_size = params.get("batch_size")

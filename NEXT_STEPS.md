@@ -14,14 +14,21 @@ Direct follow-up to SPEC_REVIEW.md's top recommendation:
 - [x] **Model catalog + format/backend compatibility built and validated** (new capability, added per direct request) — `llapdance/core/model_catalog.py`, `llapdance models <dir>...`. Scans GGUF/OpenVINO-IR/HF-safetensors, reports quant hint + which engines could plausibly load each (could-run-on, not will-run). Validated against ground truth: all 3 previously-validated cross-format models matched exactly.
 - [x] SPEC.md/README.md/VALIDATION.md/SPEC_REVIEW.md updated, full test suite passing (91 tests), committed + pushed.
 
+## Also done this session (in response to a direct follow-up question)
+
+- [x] **Confirmed sweep generalizes beyond `params.shared`** — raw engine env flags (`env.X`) and even build-time cmake flags (`source.build.build_args.X`) sweep via the exact same generic mechanism, no special-casing. Found the real flags by reading `ggml-sycl`'s actual source: `GGML_SYCL_NO_PINNED`, `GGML_OP_OFFLOAD_MIN_BATCH` (runtime env, **validated live** against a real container via `docker exec`), and `GGML_SYCL_DNNL` (a build-time cmake option controlling whether oneDNN gets linked in at all - structurally supported, **not** validated live since a from-source oneDNN rebuild is slow).
+- [x] **`describe-engine` extended** — was translator-params-only, now also returns `env_flags` (`EngineTranslator.known_env_flags`), populated for `llama-cpp-sycl` with the three flags found this session.
+
 ## Recommended next session
 
 Per the (now mostly-addressed) spec review, remaining real gaps in priority order:
 
-1. **Device-target sweeping** — sweeping is backend-param-only right now (`BackendConfig.sweep`); there's no way to say "run this same config across every discovered GPU" as a sweep axis. A natural follow-on now that param sweeping works.
-2. **Multi-GPU expert/layer placement for Arcaine** — still raw-passthrough only; `EngineTranslator.build()` only ever resolves one device per backend.
-3. **5th engine, or a web UI** — both reasonable, neither urgent. The image/model catalogs now have real data to show; a simple web view over them would be a natural next UI investment given TUI+CLI+MCP are the only interfaces today.
-4. **SSH build-from-source, embedded-DB/Prometheus storage, AMD GPU support** — longer-standing, still open, none blocking.
+1. **Populate `known_env_flags` for qxmx/Arcaine/OpenArc** — only `llama-cpp-sycl`'s source was actually read this session. Arcaine also links oneDNN (`find_package(dnnl CONFIG REQUIRED)` in its CMakeLists) and likely has its own equivalent flags worth cataloging the same way.
+2. **Validate build-arg sweeping live** — the `source.build.build_args.X` path (e.g. sweeping `GGML_SYCL_DNNL=0` vs `1`) is only unit-tested; a real rebuild-sweep would confirm it end to end, at the cost of a slow oneDNN-from-source build per value.
+3. **Device-target sweeping** — sweeping is backend-param-only right now (`BackendConfig.sweep`); there's no way to say "run this same config across every discovered GPU" as a sweep axis.
+4. **Multi-GPU expert/layer placement for Arcaine** — still raw-passthrough only; `EngineTranslator.build()` only ever resolves one device per backend.
+5. **5th engine, or a web UI** — both reasonable, neither urgent. The image/model catalogs now have real data to show; a simple web view over them would be a natural next UI investment given TUI+CLI+MCP are the only interfaces today.
+6. **SSH build-from-source, embedded-DB/Prometheus storage, AMD GPU support** — longer-standing, still open, none blocking.
 
 ## Open items carried forward (nothing urgent, unchanged unless noted)
 

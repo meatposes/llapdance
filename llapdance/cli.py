@@ -59,16 +59,27 @@ def adapters() -> None:
 @main.command("describe-engine")
 @click.argument("engine_name")
 def describe_engine_cmd(engine_name: str) -> None:
-    """Show the sweepable params a registered EngineTranslator declares
-    (SPEC.md §10's 'catalog of build switches to sweep')."""
-    params = describe_engine(engine_name)
-    if not params:
-        click.echo(f"{engine_name}: no sweepable params declared")
+    """Show what's known to be sweepable for a registered EngineTranslator
+    (SPEC.md §10's 'catalog of build switches to sweep') - translator-
+    consumed params (swept via params.shared/backend_specific) and raw
+    engine/library env flags the translator never touches (swept directly
+    via env.<NAME> - same mechanism, different config section)."""
+    catalog = describe_engine(engine_name)
+    if not catalog["params"] and not catalog["env_flags"]:
+        click.echo(f"{engine_name}: nothing cataloged")
         return
-    for param, info in params.items():
-        click.echo(f"{param}:")
-        for key, value in info.items():
-            click.echo(f"  {key}: {value}")
+    if catalog["params"]:
+        click.echo("params (swept via params.shared / params.backend_specific):")
+        for param, info in catalog["params"].items():
+            click.echo(f"  {param}:")
+            for key, value in info.items():
+                click.echo(f"    {key}: {value}")
+    if catalog["env_flags"]:
+        click.echo("env_flags (swept directly via env.<NAME>):")
+        for flag, info in catalog["env_flags"].items():
+            click.echo(f"  {flag}:")
+            for key, value in info.items():
+                click.echo(f"    {key}: {value}")
 
 
 @main.group()

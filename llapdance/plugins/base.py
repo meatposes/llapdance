@@ -148,6 +148,20 @@ class EngineTranslator(ABC):
     constrain what a suite's `sweep` axes can actually target; the dotted
     param path is still just a path into the raw config dict."""
 
+    known_env_flags: dict[str, dict[str, Any]] = {}
+    """Raw engine/library-level env var flags known to affect behavior
+    (e.g. GGML/oneDNN runtime toggles) that the translator does NOT read
+    or generate - these are swept directly via `env.<NAME>` on the raw
+    backend config, the exact same generic dotted-path mechanism as
+    sweepable_params, just a different section of the config (confirmed:
+    the sweep expansion code has no special-casing per path prefix -
+    `params.shared.x` and `env.X` go through identical logic, and both
+    have been validated live against a real container). Listed here
+    purely so `describe-engine`/`list_models`-adjacent tooling can surface
+    them - this is NOT an exhaustive list, just the ones found by reading
+    actual backend source rather than guessed at. Same entry shape as
+    sweepable_params, plus a "source" note where the flag was found."""
+
     @abstractmethod
     def build(
         self,
