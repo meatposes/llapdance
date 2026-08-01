@@ -1,0 +1,49 @@
+# Example test suite - copy and edit for a real backend.
+# Nothing here should be treated as a default; every value is meant to be
+# overridden per deployment (see SPEC.md §0).
+name: example-suite
+
+backends:
+  - name: my-engine
+    source:
+      mode: prebuilt
+      image: "ghcr.io/example/inference-engine:latest"
+    model: "example-model-7b"
+    port: 8000
+    params:
+      shared:
+        context_size: 4096
+        batch_size: 512
+        quant: "q4_k_m"
+      backend_specific: {}
+    network:
+      mode: disabled
+
+device_target:
+  mode: all_discrete   # or: indices (with `indices: [0, 2]`), or: none
+
+execution_target:
+  mode: local
+
+benchmark_adapters:
+  - adapter: generic-http
+    config:
+      prompt: "Explain what a hash table is in two sentences."
+      max_tokens: 128
+      num_requests: 3
+
+coherence_adapters:
+  - adapter: fixed-questions
+    config:
+      # omit `llm_judge` to run keyword-match-only (ambiguous answers count
+      # as failures rather than being silently passed)
+      llm_judge:
+        base_url: "http://your-openai-compatible-endpoint:8080"
+        model: "judge-model"
+
+storage:
+  flat_file_dir: "./results"
+  extra_adapters: []   # e.g. [{adapter: opensearch, config: {...}}] once built
+
+min_free_vram_mb: 2048
+allow_unknown_vram: false
