@@ -290,3 +290,59 @@ def test_post_start_request_failure_aborts_run(tmp_path, monkeypatch):
     )
     with pytest.raises(RuntimeError, match="model load failed"):
         orchestrator.run_backend(suite, suite.backends[0])
+
+
+def test_external_backend_skips_build_start_stop(tmp_path, monkeypatch):
+    # SPEC.md's "test a backend that's already loaded" case - no container
+    # lifecycle at all. Fail loudly if the orchestrator ever touches the
+    # execution registry for this path.
+    _register_fakes()
+    orig_get = registry.get
+
+    def fail_if_execution_touched(kind, name):
+        if kind == "execution":
+            raise AssertionError("external backend must never touch an execution adapter")
+        return orig_get(kind, name)
+
+    monkeypatch.setattr(orchestrator.registry, "get", fail_if_execution_touched)
+
+    suite = _suite(
+        tmp_path,
+        backends=[
+            BackendConfig(
+                name="engine-a",
+                source=BackendSource(mode=SourceMode.external, endpoint="http://fake:8000"),
+                model="already-loaded-model",
+                device_note="GPU1, B70",
+            )
+        ],
+    )
+    outcome = orchestrator.run_backend(suite, suite.backends[0])
+    assert outcome.result.image_ref is None
+    assert outcome.result.device_target == {"mode": "external", "verified": False, "note": "GPU1, B70"}
+    assert outcome.result.execution_target == {"mode": "external"}
+    assert outcome.result.benchmarks[0].metrics["avg_tokens_per_sec"] == 42.0
+
+
+def test_device_target_result_includes_full_device_identity(tmp_path, monkeypatch):
+    monkeypatch.setattr(orchestrator, "_wait_until_ready", lambda *a, **k: None)
+    _register_fakes()
+    _patch_execution(monkeypatch)
+
+    from llapdance.core.probe import DeviceInfo
+
+    fake_device = DeviceInfo(
+        index=3, vendor="intel", name="Arc Pro B70", integrated=False,
+        pci_bus_id="0000:8a:00.0", render_node="/dev/dri/renderD131",
+    )
+    monkeypatch.setattr(orchestrator, "_resolve_devices", lambda suite, runner: [fake_device])
+    monkeypatch.setattr(orchestrator, "discover_devices", lambda runner: [fake_device])
+    monkeypatch.setattr(orchestrator, "free_vram_mb", lambda device, runner: 99999.0)
+
+    suite = _suite(tmp_path, device_target=DeviceTarget(mode="indices", indices=[3]))
+    outcome = orchestrator.run_backend(suite, suite.backends[0])
+
+    assert outcome.result.device_target["verified"] is True
+    assert outcome.result.device_target["devices"] == [
+        {"index": 3, "vendor": "intel", "name": "Arc Pro B70", "pci_bus_id": "0000:8a:00.0", "render_node": "/dev/dri/renderD131"}
+    ]

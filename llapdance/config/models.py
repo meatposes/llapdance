@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field, model_validator
 class SourceMode(str, Enum):
     build = "build"
     prebuilt = "prebuilt"
+    external = "external"  # already running elsewhere - no build/start/stop lifecycle at all
 
 
 class BuildSpec(BaseModel):
@@ -31,6 +32,12 @@ class BackendSource(BaseModel):
     mode: SourceMode
     build: BuildSpec | None = None
     image: str | None = None
+    endpoint: str | None = Field(
+        default=None,
+        description="Full base URL of an already-running backend (e.g. through llm-proxy or "
+        "directly). Only used when mode='external' - no container is built, started, or "
+        "stopped; benchmark/coherence adapters are pointed at this endpoint as-is.",
+    )
 
     @model_validator(mode="after")
     def _check_mode_fields(self) -> "BackendSource":
@@ -38,6 +45,8 @@ class BackendSource(BaseModel):
             raise ValueError("source.build is required when mode='build'")
         if self.mode is SourceMode.prebuilt and not self.image:
             raise ValueError("source.image is required when mode='prebuilt'")
+        if self.mode is SourceMode.external and not self.endpoint:
+            raise ValueError("source.endpoint is required when mode='external'")
         return self
 
 
@@ -116,6 +125,14 @@ class BackendConfig(BaseModel):
         "backend after health check passes, before benchmark/coherence adapters run. For "
         "engines where 'container started' and 'model loaded' are separate steps (e.g. "
         "OpenArc: POST /openarc/load after the server is already up). Non-2xx aborts the run.",
+    )
+    device_note: str | None = Field(
+        default=None,
+        description="Free-text description of which GPU this backend is known to run on "
+        "(e.g. 'GPU1, B70'). Purely informational, stored as-is in RunResult - for "
+        "source.mode='external' backends there is no container of ours to probe, so this is "
+        "the only device identity captured for them; NEVER treated as verified the way a "
+        "probed DeviceInfo is (see RunResult.device_target's 'verified' flag).",
     )
 
 
