@@ -74,6 +74,29 @@ class BackendConfig(BaseModel):
     port: int = 8000
     network: NetworkConfig = Field(default_factory=NetworkConfig)
     env: dict[str, str] = Field(default_factory=dict)
+    command: list[str] = Field(
+        default_factory=list,
+        description="Raw CLI args appended after the image's ENTRYPOINT (e.g. llama.cpp "
+        "server needs -m/-ngl/-dev/-c as flags, not env vars). There is no "
+        "translation yet from params.shared to a concrete command per engine - "
+        "that per-engine 'wrapper' is future work (see README breadcrumbs). "
+        "This field is the honest raw-passthrough escape hatch until then.",
+    )
+    volumes: dict[str, str] = Field(
+        default_factory=dict,
+        description="host_path -> container_path, always mounted read-only. "
+        "No rw/tmpfs support yet - add if/when an adapter needs to write into "
+        "its own container (unlikely for inference-serving backends).",
+    )
+    health_path: str = "/health"
+    startup_timeout_s: float = 120
+    devices: list[str] = Field(
+        default_factory=list,
+        description="Host device nodes to pass through, docker CLI '--device' syntax "
+        "('/dev/dri:/dev/dri:rwm'). Required for GPU access on every backend tested so "
+        "far (Intel /dev/dri render nodes) - there is no vendor-aware auto-detection of "
+        "which device nodes a GPU needs, this is raw passthrough, deployer's responsibility.",
+    )
 
 
 class DeviceTargetMode(str, Enum):

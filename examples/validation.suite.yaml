@@ -1,0 +1,89 @@
+# Real end-to-end validation run (2026-08-01) - see VALIDATION.md for the
+# full writeup of what this proved and what it didn't.
+#
+# Reuses the already-validated llama-cpp-bonsai:meat6-hardened image
+# (llama.cpp SYCL server) against a real Intel Arc GPU, on a *different*
+# container name/port/device than the already-running production instance
+# so it doesn't disturb it.
+name: validation-run
+
+backends:
+  - name: bonsai-validation
+    source:
+      mode: prebuilt
+      image: "llama-cpp-bonsai:meat6-hardened"
+    # NOTE: Ternary-Bonsai-27B-dspark-Q4_1.gguf was tried first and crashes
+    # this image with a tokenizer-init SIGSEGV on any /v1/chat/completions
+    # request (loads fine, dies on first real request) - see VALIDATION.md
+    # "bug found" section. Q2_0 below is the already-proven-good variant.
+    model: "Ternary-Bonsai-27B-Q2_0"
+    port: 8080
+    volumes:
+      /mnt/ignite/LLM/huggingface/gguf/Ternary-Bonsai-27B-gguf: /models
+    # GOTCHA (see VALIDATION.md): llama.cpp's SYCL server takes model path /
+    # GPU device / context size as CLI flags, not env vars. There is no
+    # params.shared -> command translation built yet, so this is raw
+    # passthrough, not a generic "engine wrapper" (that's future work).
+    command:
+      - "-m"
+      - "/models/Ternary-Bonsai-27B-Q2_0.gguf"
+      - "-ngl"
+      - "99"
+      - "-dev"
+      - "SYCL0"
+      - "-c"
+      - "4096"
+      - "-b"
+      - "2048"
+      - "-ub"
+      - "2048"
+      - "--reasoning"
+      - "off"
+      - "--port"
+      - "8080"
+    env:
+      LLAMA_ARG_HOST: "0.0.0.0"
+      GGML_SYCL_VISIBLE_DEVICES: "0"
+      # Deliberately targeting a DIFFERENT level-zero index than the
+      # already-running bonsai container (which uses level_zero:1), to
+      # avoid VRAM contention on the same physical card.
+      ONEAPI_DEVICE_SELECTOR: "level_zero:0"
+    devices:
+      - "/dev/dri:/dev/dri"
+    health_path: "/health"
+    startup_timeout_s: 180
+    network:
+      mode: disabled
+
+# NOTE: device_target here is recorded for traceability only - it does NOT
+# drive the actual GPU pinning above (that's manual, via env). See
+# VALIDATION.md "GPU targeting" section for why these are two separate,
+# currently-unlinked things.
+device_target:
+  mode: indices
+  indices: [0]
+
+execution_target:
+  mode: local
+
+benchmark_adapters:
+  - adapter: generic-http
+    config:
+      prompt: "In one sentence, what is a hash table?"
+      max_tokens: 64
+      num_requests: 3
+
+coherence_adapters:
+  - adapter: fixed-questions
+    config: {}   # no llm_judge configured - ambiguous answers count as failures, see VALIDATION.md
+
+storage:
+  flat_file_dir: "./results"
+  extra_adapters: []
+
+# Intel free-VRAM detection isn't implemented (core/probe.py: free_vram_mb
+# returns None for Intel) - this is the documented fail-closed gap from
+# SPEC.md §15.2. Explicitly overridden here after manually confirming free
+# VRAM with `intel_gpu_top`/known model sizes; do NOT copy this override
+# into a suite you haven't personally checked.
+allow_unknown_vram: true

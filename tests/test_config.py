@@ -65,6 +65,15 @@ def test_deep_merge_overrides_nested():
     assert _deep_merge(base, override) == {"a": {"b": 9, "c": 2}}
 
 
+def test_deep_merge_indexes_into_lists():
+    base = {"backends": [{"name": "a", "model": "m1"}, {"name": "b", "model": "m2"}]}
+    override = {"backends": {"0": {"model": "m1-override"}}}
+    merged = _deep_merge(base, override)
+    assert merged["backends"][0]["model"] == "m1-override"
+    assert merged["backends"][0]["name"] == "a"
+    assert merged["backends"][1]["model"] == "m2"
+
+
 def test_parse_kv_overrides():
     result = parse_kv_overrides(["backends.0.model=foo", "min_free_vram_mb=4096"])
     assert result == {"backends": {"0": {"model": "foo"}}, "min_free_vram_mb": 4096}

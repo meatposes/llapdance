@@ -84,10 +84,17 @@ class LocalDockerExecutionTarget(ExecutionTargetAdapter):
             env["LLAPDANCE_DEVICE_INDICES"] = ",".join(str(i) for i in device_indices)
 
         port = backend_config.get("port", 8000)
+        volumes = {
+            host: {"bind": container_path, "mode": "ro"}
+            for host, container_path in backend_config.get("volumes", {}).items()
+        }
         container = self._client.containers.run(
             image_ref,
+            command=backend_config.get("command") or None,
             detach=True,
             environment=env,
+            volumes=volumes or None,
+            devices=backend_config.get("devices") or None,
             ports={f"{port}/tcp": None} if network_mode != "isolated" else None,
             network=network_name,
             network_disabled=(network_mode == "isolated"),
