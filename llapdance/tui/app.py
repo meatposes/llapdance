@@ -15,7 +15,7 @@ from __future__ import annotations
 from textual.app import App
 
 from llapdance.plugins.registry import load_builtin_adapters
-from llapdance.tui.screens import ModelBrowserScreen
+from llapdance.tui.screens import HomeScreen
 
 
 class LLAPDanceApp(App):
@@ -38,7 +38,7 @@ class LLAPDanceApp(App):
         load_builtin_adapters()
 
     def on_mount(self) -> None:
-        self.push_screen(ModelBrowserScreen())
+        self.push_screen(HomeScreen())
 
 
 if __name__ == "__main__":

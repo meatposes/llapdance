@@ -30,7 +30,7 @@ from llapdance.core import orchestrator
 from llapdance.core.catalog import list_images
 from llapdance.core.model_catalog import ModelInfo, annotate_tested_status, load_run_history, scan_models
 from llapdance.core.probe import discover_devices
-from llapdance.plugins.registry import available
+from llapdance.plugins.registry import available, describe_engine
 
 # Known real health-check conventions per engine, confirmed against real
 # containers this session (see VALIDATION.md) - not guessed. Still just a
@@ -57,10 +57,51 @@ def _default_model_path_and_volumes(model: ModelInfo) -> tuple[dict[str, str], s
     return {model.path: "/models"}, "/models"
 
 
+def _coerce_sweep_value(raw: str) -> Any:
+    """A sweep value typed into the TUI is always a string - coerce it to
+    int/float where it genuinely parses as one, so e.g. sweeping
+    params.shared.context_size across "2048,4096" produces real integers
+    in the generated YAML, not strings that only look numeric."""
+    try:
+        return int(raw)
+    except ValueError:
+        pass
+    try:
+        return float(raw)
+    except ValueError:
+        pass
+    return raw
+
+
 def _tested_summary(model: ModelInfo) -> str:
     if not model.tested:
         return "untested"
     return ", ".join(f"{engine}:{status.outcome}({status.coherence_summary or 'n/a'})" for engine, status in model.tested.items())
+
+
+class HomeScreen(Screen):
+    """Entry point: two real ways to start a test, per direct user request.
+    'Test by model' starts from what you have on disk and narrows to
+    compatible engines (`ModelBrowserScreen`, the original flow). 'Test by
+    backend' starts from a real registered engine (its real sweepable
+    params/env flags shown up front) and narrows to models known to be
+    compatible with it (`BackendBrowserScreen`) - useful when the question
+    is "what can I throw at OpenArc" rather than "what can I do with this
+    model.\""""
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        with Vertical():
+            yield Static("[b]LLAPDance[/b] - how do you want to start?")
+            yield Button("Test by model →", id="by-model-btn", variant="primary")
+            yield Button("Test by backend →", id="by-backend-btn", variant="primary")
+        yield Footer()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "by-model-btn":
+            self.app.push_screen(ModelBrowserScreen())
+        elif event.button.id == "by-backend-btn":
+            self.app.push_screen(BackendBrowserScreen())
 
 
 class ModelBrowserScreen(Screen):
@@ -76,7 +117,12 @@ class ModelBrowserScreen(Screen):
     banner plus real, visible, clickable buttons for every action -
     keybindings still work too, but nothing requires knowing them."""
 
-    BINDINGS = [("s", "scan", "Scan directories"), ("enter", "configure", "Configure a run for this model"), ("q", "quit", "Quit")]
+    BINDINGS = [
+        ("s", "scan", "Scan directories"),
+        ("enter", "configure", "Configure a run for this model"),
+        ("escape", "back", "Back"),
+        ("q", "quit", "Quit"),
+    ]
 
     def __init__(self) -> None:
         super().__init__()
@@ -91,8 +137,13 @@ class ModelBrowserScreen(Screen):
                 yield Button("Scan", id="scan-btn", variant="primary")
             yield DataTable(id="models")
             yield Static("", id="status")
-            yield Button("Configure a run for the selected model →", id="configure-btn", variant="success")
+            with Horizontal():
+                yield Button("← Back", id="back-btn")
+                yield Button("Configure a run for the selected model →", id="configure-btn", variant="success")
         yield Footer()
+
+    def action_back(self) -> None:
+        self.app.pop_screen()
 
     def on_mount(self) -> None:
         table = self.query_one("#models", DataTable)
@@ -133,6 +184,100 @@ class ModelBrowserScreen(Screen):
             self.action_scan()
         elif event.button.id == "configure-btn":
             self.action_configure()
+        elif event.button.id == "back-btn":
+            self.action_back()
+
+
+def _engine_info_text(engine: str) -> str:
+    info = describe_engine(engine)
+    params = ", ".join(info["params"].keys()) or "(none declared)"
+    env_flags = ", ".join(info["env_flags"].keys()) or "(none declared)"
+    return f"[b]{engine}[/b] sweepable params: {params}\nknown env flags: {env_flags}"
+
+
+class BackendBrowserScreen(Screen):
+    """Test-by-backend: the other real entry point, per direct request -
+    pick a real registered engine first (its real sweepable params/env
+    flags shown immediately, from `describe_engine` - the same info
+    `llapdance describe-engine` prints), THEN narrow to models known to be
+    compatible with it. Converges on the same `BuildScreen` as
+    test-by-model, just with the engine already chosen."""
+
+    BINDINGS = [("escape", "back", "Back")]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._models: list[ModelInfo] = []
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        with Vertical():
+            yield Static("[b]Step 1 of 3:[/b] pick a backend/engine to test against.")
+            engines = available("engine")
+            yield Select([(e, e) for e in engines], id="engine", value=engines[0] if engines else Select.BLANK)
+            yield Static(_engine_info_text(engines[0]) if engines else "(no engines registered)", id="engine-info")
+            with Horizontal():
+                yield Input(value="/mnt/ignite/LLM/models", id="scan-dirs")
+                yield Button("Scan for compatible models", id="scan-btn", variant="primary")
+            yield DataTable(id="models")
+            yield Static("", id="status")
+            with Horizontal():
+                yield Button("← Back", id="back-btn")
+                yield Button("Configure a run with this backend →", id="configure-btn", variant="success")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        table = self.query_one("#models", DataTable)
+        table.add_columns("Format", "Quant", "Compatible?", "Tested", "Path")
+        table.cursor_type = "row"
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id == "engine" and event.value != Select.BLANK:
+            self.query_one("#engine-info", Static).update(_engine_info_text(event.value))
+            self._refresh_table()
+
+    def action_scan(self) -> None:
+        self._refresh_table()
+
+    def _refresh_table(self) -> None:
+        engine = self.query_one("#engine", Select).value
+        dirs = self.query_one("#scan-dirs", Input).value.split()
+        table = self.query_one("#models", DataTable)
+        table.clear()
+        self._models = scan_models(dirs)
+        annotate_tested_status(self._models, load_run_history("./results"))
+        # compatible-first, so the models this backend can actually load
+        # aren't buried under ones it can't
+        self._models.sort(key=lambda m: engine not in m.compatible_engines)
+        for m in self._models:
+            compatible = "yes" if engine in m.compatible_engines else "no"
+            table.add_row(m.format, m.quant_hint, compatible, _tested_summary(m), m.path)
+        status = self.query_one("#status", Static)
+        n_compatible = sum(1 for m in self._models if engine in m.compatible_engines)
+        status.update(f"{n_compatible}/{len(self._models)} models compatible with {engine}. Pick a row, then 'Configure'.")
+
+    def action_configure(self) -> None:
+        table = self.query_one("#models", DataTable)
+        if not self._models:
+            self.query_one("#status", Static).update("[red]scan a directory with real models in it first[/red]")
+            return
+        if table.cursor_row is None:
+            self.query_one("#status", Static).update("[red]select a row in the table first[/red]")
+            return
+        model = self._models[table.cursor_row]
+        engine = self.query_one("#engine", Select).value
+        self.app.push_screen(BuildScreen(model, preselected_engine=engine))
+
+    def action_back(self) -> None:
+        self.app.pop_screen()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "scan-btn":
+            self.action_scan()
+        elif event.button.id == "configure-btn":
+            self.action_configure()
+        elif event.button.id == "back-btn":
+            self.action_back()
 
 
 def _local_image_options() -> list[tuple[str, str]]:
@@ -160,9 +305,10 @@ class BuildScreen(Screen):
 
     BINDINGS = [("escape", "back", "Back"), ("g", "generate", "Generate/refresh YAML"), ("r", "launch", "Run this suite")]
 
-    def __init__(self, model: ModelInfo) -> None:
+    def __init__(self, model: ModelInfo, preselected_engine: str | None = None) -> None:
         super().__init__()
         self._model = model
+        self._preselected_engine = preselected_engine
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -173,7 +319,8 @@ class BuildScreen(Screen):
             )
             with Horizontal():
                 engines = self._model.compatible_engines or available("engine")
-                yield Select([(e, e) for e in engines], id="engine", value=engines[0] if engines else Select.BLANK)
+                default_engine = self._preselected_engine if self._preselected_engine in engines else (engines[0] if engines else Select.BLANK)
+                yield Select([(e, e) for e in engines], id="engine", value=default_engine)
                 devices = discover_devices()
                 yield Select(
                     [(f"{d.index}: {d.name}", d.index) for d in devices],
@@ -196,6 +343,13 @@ class BuildScreen(Screen):
             with Horizontal():
                 yield Input(value="8000", placeholder="port", id="port")
                 yield Input(value="4096", placeholder="context_size", id="context-size")
+            yield Static(
+                "[b]Sweep (optional):[/b] pick a dotted param below and comma-separated values to sweep "
+                "(real mechanism - BackendConfig.sweep, SPEC.md §10 - expands into one run per value)."
+            )
+            with Horizontal():
+                yield Select([], id="sweep-param", allow_blank=True, prompt="no sweep")
+                yield Input(placeholder="values, comma-separated (e.g. 2048,4096,8192)", id="sweep-values")
             with Horizontal():
                 yield Button("Generate config ↓", id="generate-btn", variant="primary")
                 yield Button("Run this suite ▶", id="launch-btn", variant="success")
@@ -203,6 +357,19 @@ class BuildScreen(Screen):
             yield TextArea.code_editor("", language="yaml", id="yaml-preview")
             yield Static("", id="build-status")
         yield Footer()
+
+    def on_mount(self) -> None:
+        self._refresh_sweep_options()
+
+    def _refresh_sweep_options(self) -> None:
+        engine = self.query_one("#engine", Select).value
+        if engine == Select.BLANK:
+            return
+        info = describe_engine(engine)
+        options = [(f"params.shared.{k}", f"params.shared.{k}") for k in info["params"]]
+        options += [(f"env.{k}", f"env.{k}") for k in info["env_flags"]]
+        sweep_select = self.query_one("#sweep-param", Select)
+        sweep_select.set_options(options)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "generate-btn":
@@ -217,6 +384,8 @@ class BuildScreen(Screen):
         # action_generate() only ever needs to read one source of truth
         if event.select.id == "image-select" and event.value != Select.BLANK:
             self.query_one("#image", Input).value = str(event.value)
+        elif event.select.id == "engine":
+            self._refresh_sweep_options()
 
     def action_back(self) -> None:
         self.app.pop_screen()
@@ -281,10 +450,23 @@ class BuildScreen(Screen):
             "coherence_adapters": [{"adapter": "fixed-questions", "config": {"model": served_name}}],
             "storage": {"flat_file_dir": "./results", "extra_adapters": []},
         }
+
+        # Real sweep mechanism (SPEC.md §10, llapdance/config/sweep.py) -
+        # this ONE backend config expands into one real run per value at
+        # `run_suite` time, same as any hand-written sweep suite. Values
+        # are parsed as int/float where possible so e.g. context_size
+        # sweeps as real numbers, not strings that happen to look numeric.
+        sweep_param = self.query_one("#sweep-param", Select).value
+        sweep_values_raw = self.query_one("#sweep-values", Input).value.strip()
+        if sweep_param != Select.BLANK and sweep_values_raw:
+            values = [_coerce_sweep_value(v.strip()) for v in sweep_values_raw.split(",") if v.strip()]
+            suite_dict["backends"][0]["sweep"] = [{"param": sweep_param, "values": values}]
+
         self.query_one("#yaml-preview", TextArea).text = yaml.safe_dump(suite_dict, sort_keys=False)
+        sweep_note = f" This will expand into {len(values)} real runs (sweeping {sweep_param})." if sweep_param != Select.BLANK and sweep_values_raw else ""
         self.query_one("#build-status", Static).update(
             "Generated - review/edit above if needed (params.shared, health_path, volumes for engine-specific mounts), "
-            "then click [b]Run this suite[/b]."
+            f"then click [b]Run this suite[/b].{sweep_note}"
         )
 
     def action_launch(self) -> None:
