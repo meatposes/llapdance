@@ -4,7 +4,7 @@
 
 Orchestrates building/starting/stopping LLM inference engine containers under different configurations, runs pluggable benchmark and coherence/quality checks against them, and stores results for cross-run comparison. Every piece — which engines, which benchmark/coherence tool, where results go, which GPU, which machine it runs on — is config, not hardcoded. Full design rationale: [SPEC.md](./SPEC.md).
 
-Status: early build (v0.1) — thin vertical slice + TUI, validated end-to-end against a real Intel Arc GPU running a real llama.cpp container (2026-08-01). Not everything in SPEC.md is implemented yet; see "What's implemented" below and [VALIDATION.md](./VALIDATION.md) for the full writeup, bugs found, and breadcrumbs for building the remaining adapters.
+Status: early build (v0.1) — thin vertical slice + TUI, validated end-to-end against real Intel Arc GPU hardware running two different backends (llama.cpp and a custom engine, qxmx) with the same model (2026-08-01). Not everything in SPEC.md is implemented yet; see "What's implemented" below and [VALIDATION.md](./VALIDATION.md) for the full writeup, bugs found, and breadcrumbs for building the remaining adapters.
 
 ## Install
 
@@ -22,7 +22,7 @@ llapdance run examples/example.suite.yaml --set backends.0.model=other-model
 llapdance tui                            # browse *.suite.yaml in cwd, run interactively
 ```
 
-Copy `examples/example.suite.yaml` and edit it for a real backend — nothing in it is a usable default, every value needs to be set for your environment. `examples/validation.suite.yaml` is a real, working suite (the one used for the 2026-08-01 validation run) — closer to a working reference than the generic example, though its device/volume paths are specific to that machine.
+Copy `examples/example.suite.yaml` and edit it for a real backend — nothing in it is a usable default, every value needs to be set for your environment. `examples/validation.suite.yaml` (llama.cpp/SYCL) and `examples/validation-qxmx.suite.yaml` (qxmx, a custom engine) are real, working suites used for the 2026-08-01 validation runs — closer to working references than the generic example, though their device/volume paths are specific to that machine. Between the two, they're a worked example of how differently two engines can need to be invoked (`ENTRYPOINT`+flags vs. `CMD`+full command, env-var GPU selection vs. render-node-only passthrough) for the same underlying model.
 
 ## What's implemented (v0.1)
 
@@ -33,7 +33,7 @@ Copy `examples/example.suite.yaml` and edit it for a real backend — nothing in
   - `generic-http` benchmark adapter — TTFT/throughput prober against any OpenAI-compatible endpoint. This, not `llama-benchy`, is the one guaranteed to work out of the box (see below). **Validated with real numbers against a real llama.cpp server.**
   - `fixed-questions` coherence adapter — 10-question set, keyword match with LLM-judge fallback via a generic OpenAI-compatible client. **Validated (10/10) against a real server.**
   - `flat-file` storage adapter — the only always-on default per SPEC.md §8. **Validated**: write + prior-run delta lookup both exercised for real.
-- Orchestrator core tying the above together, including GPU hardware probing (`llapdance/core/probe.py`, Intel-OpenCL + NVIDIA so far) with a hard-fail-closed VRAM preflight check, and a startup health-poll (`_wait_until_ready`) so benchmark/coherence adapters don't fire before the model has finished loading.
+- Orchestrator core tying the above together, including GPU hardware probing (`llapdance/core/probe.py` — Intel via `xpumcli` (preferred, gives real free-VRAM + stable PCI bus id) or `clinfo` (fallback, enumeration only), plus NVIDIA via `nvidia-smi`) with a **real, validated** VRAM preflight check (confirmed to reject an actual over-budget request with a real free-memory number on Intel hardware), and a startup health-poll (`_wait_until_ready`) so benchmark/coherence adapters don't fire before the model has finished loading.
 - CLI (`llapdance run/adapters/tui`) and a Textual TUI browsing `*.suite.yaml` files in the working directory.
 
 ## Known gaps / not yet built
@@ -41,7 +41,8 @@ Copy `examples/example.suite.yaml` and edit it for a real backend — nothing in
 - `llama-benchy` adapter is a **stub that raises `NotImplementedError`** — see `llapdance/plugins/benchmark/llama_benchy.py`. It exposes only a Flask dashboard with no discoverable REST API; wrapping it needs its real API confirmed first, not guessed at.
 - No remote (SSH) execution target yet — `execution_target.mode: ssh` validates in config but has no adapter registered.
 - No embedded-DB, OpenSearch, or Prometheus/Grafana storage adapters yet — only `flat-file`.
-- VRAM-free-memory detection is NVIDIA-only right now (`nvidia-smi`); Intel devices are enumerated and integrated-vs-discrete classified, but free-VRAM reporting isn't wired up (`core/probe.py: free_vram_mb`), so Intel runs fail closed unless `allow_unknown_vram: true` is explicitly set in the suite.
+- VRAM-free-memory detection now works for both NVIDIA (`nvidia-smi`) and Intel (`xpumcli`) — Intel only falls back to fail-closed (`allow_unknown_vram: true` required) when `xpumcli` itself isn't installed, in which case discovery falls back to `clinfo` (enumeration only, no VRAM reporting). AMD is still unimplemented.
+- GPU index spaces don't correspond across tools — confirmed on real hardware, not theoretical (see VALIDATION.md). `DeviceInfo.pci_bus_id` and `DeviceInfo.render_node` exist specifically to give something stable to reconcile against; `DeviceInfo.index` is only meaningful within whichever discovery source produced it.
 - No image-catalog/labeling UI yet (SPEC.md §12).
 - No web UI yet — TUI + CLI only.
 - No translation from `params.shared` (normalized cross-backend knobs) into a concrete `command`/`env` per engine yet — `BackendConfig.command`/`env` are raw passthrough today. This is the next real piece of work; see VALIDATION.md "Gaps found" for where it plugs in.
