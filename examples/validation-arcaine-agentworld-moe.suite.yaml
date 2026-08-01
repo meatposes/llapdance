@@ -1,0 +1,59 @@
+# The official Arcaine-supported MoE checkpoint (see ~/Arcaine/README.md
+# "Supported Models" - "Qwen AgentWorld-35B-A3B NVFP4"), fetched specifically
+# to answer a real question: were the earlier qwen3_5_moe crashes
+# (AEON-7/Ornith, urakozz/Ornith - see VALIDATION.md "Thirteenth session")
+# a genuine Arcaine bug, or just incompatible third-party quantization
+# recipes? This checkpoint's model_type is ALREADY "qwen3_5_moe_text" (the
+# exact registry key) out of the box - no config patching needed, unlike
+# the AEON-7 shim attempt.
+name: validation-arcaine-agentworld-moe
+
+backends:
+  - name: arcaine-agentworld-moe
+    source:
+      mode: prebuilt
+      image: "arcaine-server:qwen35fix"   # see examples/Dockerfile.arcaine-server-rebuild
+    model: "Qwen-AgentWorld-35B-A3B-NVFP4"
+    model_path: "/models/agentworld"
+    engine: "arcaine"
+    port: 7467
+    volumes:
+      /mnt/ignite/LLM/models/Frosty40/Qwen-AgentWorld-35B-A3B-NVFP4: /models/agentworld
+    params:
+      shared:
+        context_size: 4096
+      backend_specific:
+        served_model_name: "Qwen-AgentWorld-35B-A3B-NVFP4"
+    # GOTCHA: Arcaine's image has no /health endpoint at all (confirmed via
+    # a live container - 404). /v1/models is the real readiness signal.
+    health_path: "/v1/models"
+    startup_timeout_s: 180
+    network:
+      mode: disabled
+
+device_target:
+  mode: indices
+  indices: [3]   # same idle B70 (PCI 0000:8a:00.0) used for every backend validated so far
+
+execution_target:
+  mode: local
+
+benchmark_adapters:
+  - adapter: generic-http
+    config:
+      model: "Qwen-AgentWorld-35B-A3B-NVFP4"
+      prompt: "In one sentence, what is a hash table?"
+      max_tokens: 64
+      num_requests: 3
+
+coherence_adapters:
+  - adapter: fixed-questions
+    config:
+      model: "Qwen-AgentWorld-35B-A3B-NVFP4"
+
+storage:
+  flat_file_dir: "./results"
+  extra_adapters: []
+
+min_free_vram_mb: 4096
+allow_unknown_vram: false

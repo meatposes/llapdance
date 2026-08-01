@@ -4,7 +4,13 @@ Live document — updated as work progresses. See VALIDATION.md for the full
 writeup and SPEC_REVIEW.md for the "are we still on track" assessment (now
 partly resolved - see its update note at the top).
 
-## Session complete (2026-08-01, continued) — model-dir/HF-cache cleanup, 3 more catalog models, a real coherence-adapter fix
+## Session complete (2026-08-01, continued) — closed out the MoE-loader question with the official checkpoint
+
+Downloaded `Frosty40/Qwen-AgentWorld-35B-A3B-NVFP4` (Arcaine README's 4th "Supported Model", the exact MoE checkpoint - real answer to "was the AEON-7/urakozz crash a genuine Arcaine bug or bad checkpoints?"). **It loads and runs cleanly** - confirms the earlier crashes were bad third-party quantization recipes, not an Arcaine bug. But found a new, separate issue: only 5/10 fixed-questions passed, and the failures are genuinely degenerate output (repeated empty `<think>` loops or backtick blocks, not a truncation issue) - a real generation-quality/stability finding under Arcaine's default sampling for this checkpoint, not investigated further this session, flagged honestly rather than worked around.
+
+- [ ] Follow-up candidate: investigate the AgentWorld MoE checkpoint's degenerate-repetition failures - likely a sampling-params (temperature/repetition-penalty) or MTP-speculative-decode interaction, not diagnosed this session.
+
+## Prior session (2026-08-01, continued) — model-dir/HF-cache cleanup, 3 more catalog models, a real coherence-adapter fix
 
 Also this session: surveyed model storage sprawl (3 disconnected pools, ~1.15TB), found the "17 duplicate" HF-cache overlaps were actually empty 12K stubs (no real duplication), found and cleaned 2 genuinely broken/partial downloads (root-owned files needed sudo), removed 81 empty stub dirs, and confirmed ignite doesn't have room to absorb the full HF cache (~93G free vs 567G needed) - consolidating onto `/mnt/acheron` (3.0T free) or `/mnt/malebolge` (3.6T free) is the real path if that's still wanted.
 
