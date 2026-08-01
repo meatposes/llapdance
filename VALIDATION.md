@@ -88,6 +88,44 @@ Confirmed concretely, not theoretically: the same 4 physical GPUs enumerate as d
 
 Picked device index 3 (xpumcli numbering) / PCI `0000:8a:00.0` / `/dev/dri/renderD131` deliberately — confirmed via `probe.discover_devices()` to be the least-loaded discrete card (~32.6GB free at the time) before writing the suite, specifically to avoid contending with the already-running production `llama-cpp-bonsai` (on a different card) or the heavily-loaded B50 (`0000:84:00.0`, was at ~16.3/16.3GB used, i.e. essentially full). Passed through as a single render node (`--device /dev/dri/renderD131:/dev/dri/renderD131`), not the whole `/dev/dri` directory — qxmx has no device-selector flag or env var at all (its README says "only one GPU is supported" right now), so **which render node(s) are passed through *is* qxmx's entire GPU-pinning mechanism**, not a hint alongside some other selector like llama.cpp's `ONEAPI_DEVICE_SELECTOR`.
 
+## Third validation run — params translation layer built and validated (2026-08-01)
+
+Built the "per-engine wrapper" the original spec envisioned: `EngineTranslator` (`llapdance/plugins/base.py`), a new plugin kind (`registry.get("engine", ...)`), and two reference implementations - `llama-cpp-sycl` and `qxmx` (`llapdance/plugins/engine/`). A `BackendConfig.engine` name plus normalized `params.shared` now generates `command`/`env`/`devices`; anything set explicitly in `command`/`env`/`devices` still wins for that field (raw passthrough stays the escape hatch, not replaced).
+
+Normalized params validated against both real engines: `context_size`, `batch_size` (llama.cpp only - qxmx has no batching flag, confirmed via its own usage banner, so the translator ignores it rather than inventing one), `kv_cache_quant` (`f16`/`q8_0`/`f8`, engines use different value spellings - `f16`→`fp16` for qxmx, and `f8` is rejected outright for llama.cpp since it has no fp8 KV cache type), `parallel_slots`, and `reasoning` (llama.cpp only, see the real bug below).
+
+### GPU pinning simplified along the way
+
+Went to verify whether llama.cpp's `ONEAPI_DEVICE_SELECTOR=level_zero:N` reliably maps to a specific physical card (the open question from the second validation run) and instead found something better: **restricting `--device` to a single render node is sufficient on its own** - with only one render node passed through, llama.cpp only ever sees one SYCL device and uses it, no selector env var needed at all. Confirmed empirically: passed only `/dev/dri/renderD131` with no `ONEAPI_DEVICE_SELECTOR`/`GGML_SYCL_VISIBLE_DEVICES`, and llama.cpp correctly reported exactly one device (`SYCL0`). This means GPU pinning is now **uniform across both engines** - render-node-scoped passthrough, resolved from `DeviceInfo.render_node` (added last session) - rather than qxmx using render nodes and llama.cpp using a separately-numbered vendor selector. Simpler, and doesn't depend on a mapping this session couldn't actually verify (attempted a live cross-check between `level_zero:N` and `xpumcli`'s per-device free-VRAM numbers; they didn't match closely enough to trust, most likely because VRAM usage on this shared box fluctuates from other processes between the two readings, not because the index mapping itself is wrong - but since it couldn't be verified cleanly, it isn't relied on).
+
+Also noted along the way: llama.cpp's own self-reported free VRAM (in its startup log line) did not match `xpumcli`'s live reading for the same device at nearly the same moment (32.5GB vs 25.2GB) even when the render-node restriction guarantees they're looking at the *same* physical card - likely a difference in what each tool measures/when, not a device-identity problem. Breadcrumb: **don't cross-validate the VRAM preflight against an engine's own self-reported number** - trust the vendor tool (`xpumcli`) for the preflight check itself, and treat an engine's own log line as informational only.
+
+### Real bug found: an incorrect assumption I made, not a pre-existing issue
+
+The first pass of the `llama-cpp-sycl` translator omitted `--reasoning off` because an earlier validation run's comment guessed it was "likely specific to this hardened fork's model family, not stock llama.cpp." That guess was wrong, and running the translator-generated suite for real caught it immediately: benchmark numbers looked fine (39 tok/s), but **all 10 coherence questions failed with empty answers**.
+
+Root cause, confirmed via `llama-server --help`: `--reasoning [on|off|auto]` (env `LLAMA_ARG_REASONING`) is a real, general upstream llama.cpp flag, default `auto` ("detect from template"). This model's chat template auto-enables thinking, so every response put its entire token budget into a hidden `message.reasoning_content` field while `message.content` came back empty (confirmed by hand: `finish_reason: "length"`, `content: ""`, `reasoning_content: "Thinking Process:..."`). The benchmark adapter didn't catch this because it only counts streamed tokens, never inspects content - **this is exactly why the coherence check exists as a separate concern from throughput benchmarking**, and it caught a real mistake I made, not a pre-existing bug in the target.
+
+Fixed by adding `reasoning` as a proper normalized param (`llapdance/plugins/engine/llama_cpp_sycl.py`), left llama.cpp's own default (`auto`) as the translator's default (does not silently override it), and updated `examples/validation.suite.yaml` to set `reasoning: "off"` explicitly with a comment explaining why it's required for this model, not optional. Re-ran end to end after the fix: 10/10 coherence, confirmed via the actual stored result JSON that the generated command included `LLAMA_ARG_REASONING: off`.
+
+**Breadcrumb: don't assert a flag is "probably fork-specific" or "probably not needed" without checking `--help` first** - it took under 10 minutes to confirm via `docker run --rm --device ... --entrypoint /app/llama-server <image> --help` once the failure was noticed, and would have taken zero minutes to just check before writing the claim into a comment in the first place.
+
+Both engines confirmed working through the translator, end to end, for real:
+
+```
+=== bonsai-validation (23f41b0a8eb6) ===
+  [generic-http] {'avg_tokens_per_sec': 37.0, ...}
+  [fixed-questions] 10/10 passed
+
+=== qxmx-validation (fe0a047f310c) ===
+  [generic-http] {'avg_tokens_per_sec': 22.0, ...}
+  [fixed-questions] 10/10 passed
+```
+
+### Bug found in this session's own test suite (again) - silently excluded tests
+
+While adding unit tests for the two translators, `pyproject.toml`'s `python_classes = ["Test_*"]` (added two sessions ago specifically to silence a pytest warning about colliding with the `TestSuite` config model) silently excluded every class-based test file from ever being collected - `pytest -q` reported "22 passed" with no indication that 9 newly-written tests never ran at all. Caught only by noticing the collected-test count didn't match what was actually written, not by any failure output. Fixed by reverting to pytest's default `python_classes` and suppressing the specific warning via `filterwarnings` instead (`pyproject.toml`). **Breadcrumb: never narrow what a test runner is allowed to collect to silence a cosmetic warning - it will eventually eat real tests silently, and "N passed" with no failures is not the same as "everything that was written actually ran."**
+
 ## Updated adapter status (see README.md, now reflects reality instead of aspiration)
 
 | Adapter | Status |
@@ -100,4 +138,4 @@ Picked device index 3 (xpumcli numbering) / PCI `0000:8a:00.0` / `/dev/dri/rende
 | `llama-benchy` benchmark | Still a stub — unrelated to this validation, no new information. |
 | SSH execution target | Not built. `RunningBackend`/`ExecutionTargetAdapter` contract exercised only locally twice; nothing contradicts it working remotely, but it's unverified. |
 | OpenSearch / embedded-DB / Prometheus storage | Not built. |
-| `params.shared` → per-engine `command`/`env` translation | Still not built — both validation runs used raw `command`/`env`/`devices` passthrough. Two real backends now exist as worked examples (`examples/validation.suite.yaml` for llama.cpp-SYCL, `examples/validation-qxmx.suite.yaml` for qxmx) to build that translation layer against. |
+| `params.shared` → per-engine `command`/`env` translation | **Built and validated.** `EngineTranslator` plugin kind + `llama-cpp-sycl`/`qxmx` reference implementations, both re-validated end to end against real hardware after the reasoning-flag fix. Raw `command`/`env`/`devices` passthrough remains available for anything a translator doesn't cover. |

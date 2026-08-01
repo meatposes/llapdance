@@ -27,4 +27,10 @@ build-backend = "setuptools.build_meta"
 include = ["llapdance*"]
 
 [tool.pytest.ini_options]
-python_classes = ["Test_*"]  # avoid pytest trying to collect the TestSuite config model
+# GOTCHA: an earlier version of this restricted python_classes to "Test_*"
+# to silence pytest's warning about colliding with the TestSuite config
+# model - that silently excluded every class-based test file from ever
+# running (caught only by noticing collected-test count didn't match
+# tests actually written). Suppress the specific warning instead; don't
+# restrict what pytest is allowed to collect as a test.
+filterwarnings = ["ignore:cannot collect test class 'TestSuite':UserWarning"]

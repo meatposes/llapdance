@@ -11,7 +11,7 @@ from typing import Any
 import httpx
 
 from llapdance.config.models import BackendConfig, TestSuite
-from llapdance.core.probe import discover_devices, free_vram_mb
+from llapdance.core.probe import DeviceInfo, discover_devices, free_vram_mb
 from llapdance.core.result import RunResult
 from llapdance.plugins import registry
 from llapdance.plugins.base import StorageAdapter
@@ -49,19 +49,41 @@ class RunOutcome:
     delta_against: RunResult | None
 
 
-def _resolve_device_indices(suite: TestSuite) -> list[int]:
+def _resolve_devices(suite: TestSuite) -> list[DeviceInfo]:
     target = suite.device_target
     if target.mode.value == "none":
         return []
-    devices = discover_devices()
-    discrete = [d for d in devices if not d.integrated]
+    discrete = [d for d in discover_devices() if not d.integrated]
     if target.mode.value == "indices":
         chosen = [d for d in discrete if d.index in target.indices]
         missing = set(target.indices) - {d.index for d in chosen}
         if missing:
             raise ValueError(f"requested device indices not found among discrete devices: {sorted(missing)}")
-        return [d.index for d in chosen]
-    return [d.index for d in discrete]  # all_discrete
+        return chosen
+    return discrete  # all_discrete
+
+
+def _apply_engine_translator(backend: BackendConfig, device: DeviceInfo | None) -> dict[str, Any]:
+    """Layers an EngineTranslator's generated command/env/devices onto a
+    backend's raw config, with anything the user set explicitly winning
+    for that field (SPEC.md's raw passthrough stays the escape hatch)."""
+    backend_dict = backend.model_dump()
+    if not backend.engine:
+        return backend_dict
+
+    translator = registry.get("engine", backend.engine)()
+    invocation = translator.build(
+        model_path=backend.model_path or "",
+        params=backend.params.shared,
+        port=backend.port,
+        device=device,
+    )
+    if not backend_dict["command"]:
+        backend_dict["command"] = invocation.command
+    if not backend_dict["devices"]:
+        backend_dict["devices"] = invocation.devices
+    backend_dict["env"] = {**invocation.env, **backend_dict["env"]}  # user env wins on key conflicts
+    return backend_dict
 
 
 def _vram_preflight(device_indices: list[int], min_free_mb: float, allow_unknown: bool) -> None:
@@ -98,11 +120,18 @@ def _build_storage_adapters(suite: TestSuite) -> list[StorageAdapter]:
 
 def run_backend(suite: TestSuite, backend: BackendConfig) -> RunOutcome:
     execution = registry.get("execution", "local-docker")({})
-    device_indices = _resolve_device_indices(suite)
+    devices = _resolve_devices(suite)
+    device_indices = [d.index for d in devices]
     _vram_preflight(device_indices, min_free_mb=suite.min_free_vram_mb, allow_unknown=suite.allow_unknown_vram)
 
-    image_ref = execution.build(backend.model_dump())
-    running = execution.start(backend.model_dump(), image_ref, device_indices)
+    # Only the first resolved device is handed to an EngineTranslator - both
+    # reference engines (llama.cpp, qxmx) only support pinning to one GPU
+    # each; multi-GPU split is out of scope for this translation layer
+    # (see VALIDATION.md).
+    backend_dict = _apply_engine_translator(backend, devices[0] if devices else None)
+
+    image_ref = execution.build(backend_dict)
+    running = execution.start(backend_dict, image_ref, device_indices)
     try:
         _wait_until_ready(running.endpoint, backend.health_path, backend.startup_timeout_s)
 
@@ -119,9 +148,17 @@ def run_backend(suite: TestSuite, backend: BackendConfig) -> RunOutcome:
         execution.stop(running)
 
     storages = _build_storage_adapters(suite)
+    # Record the FINAL command/env/devices (post-translator), not the
+    # possibly-empty raw config - this is what actually ran.
+    recorded_config = {
+        **backend.model_dump(mode="json"),
+        "command": backend_dict["command"],
+        "env": backend_dict["env"],
+        "devices": backend_dict["devices"],
+    }
     result = RunResult(
         backend_name=backend.name,
-        backend_config=backend.model_dump(mode="json"),
+        backend_config=recorded_config,
         image_ref=image_ref,
         execution_target=suite.execution_target.model_dump(mode="json"),
         device_target={"mode": suite.device_target.mode.value, "resolved_indices": device_indices},

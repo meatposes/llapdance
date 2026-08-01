@@ -12,7 +12,14 @@ from llapdance.config.models import (
 )
 from llapdance.core import orchestrator
 from llapdance.core.result import BenchmarkResult, CoherenceResult, RunResult
-from llapdance.plugins.base import BenchmarkAdapter, CoherenceAdapter, ExecutionTargetAdapter, RunningBackend
+from llapdance.plugins.base import (
+    BenchmarkAdapter,
+    CoherenceAdapter,
+    EngineInvocation,
+    EngineTranslator,
+    ExecutionTargetAdapter,
+    RunningBackend,
+)
 from llapdance.plugins import registry
 
 
@@ -69,10 +76,22 @@ class FakeCoherence(CoherenceAdapter):
         return CoherenceResult(adapter=self.name, total=10, passed=9, graded_by_match=9, graded_by_llm_judge=0)
 
 
+class FakeEngineTranslator(EngineTranslator):
+    name = "fake-engine"
+
+    def build(self, model_path, params, port, device):
+        return EngineInvocation(
+            command=["generated", "-m", model_path, "-c", str(params.get("context_size", 1234))],
+            env={"GENERATED": "1"},
+            devices=[],
+        )
+
+
 def _register_fakes():
     registry.register("execution", FakeExecutionTarget.name, FakeExecutionTarget)
     registry.register("benchmark", FakeBenchmark.name, FakeBenchmark)
     registry.register("coherence", FakeCoherence.name, FakeCoherence)
+    registry.register("engine", FakeEngineTranslator.name, FakeEngineTranslator)
 
 
 def _suite(tmp_path, **overrides) -> TestSuite:
@@ -142,3 +161,63 @@ def test_run_backend_skips_device_probe_when_mode_none(tmp_path, monkeypatch):
     orchestrator.run_backend(suite, suite.backends[0])
 
     assert FakeExecutionTarget.started_with == [[]]
+
+
+def _patch_execution(monkeypatch):
+    orig_get = registry.get
+
+    def get_with_fake_execution(kind, name):
+        if kind == "execution":
+            return FakeExecutionTarget
+        return orig_get(kind, name)
+
+    monkeypatch.setattr(orchestrator.registry, "get", get_with_fake_execution)
+
+
+def test_engine_translator_generates_command_when_none_given(tmp_path, monkeypatch):
+    monkeypatch.setattr(orchestrator, "_wait_until_ready", lambda *a, **k: None)
+    _register_fakes()
+    _patch_execution(monkeypatch)
+
+    suite = _suite(
+        tmp_path,
+        backends=[
+            BackendConfig(
+                name="engine-a",
+                source=BackendSource(mode=SourceMode.prebuilt, image="x:y"),
+                model="m",
+                model_path="/models/m.gguf",
+                engine="fake-engine",
+                params={"shared": {"context_size": 9999}},
+            )
+        ],
+    )
+    outcome = orchestrator.run_backend(suite, suite.backends[0])
+    assert outcome.result.backend_config["command"] == ["generated", "-m", "/models/m.gguf", "-c", "9999"]
+    assert outcome.result.backend_config["env"] == {"GENERATED": "1"}
+
+
+def test_explicit_command_overrides_engine_translator(tmp_path, monkeypatch):
+    monkeypatch.setattr(orchestrator, "_wait_until_ready", lambda *a, **k: None)
+    _register_fakes()
+    _patch_execution(monkeypatch)
+
+    suite = _suite(
+        tmp_path,
+        backends=[
+            BackendConfig(
+                name="engine-a",
+                source=BackendSource(mode=SourceMode.prebuilt, image="x:y"),
+                model="m",
+                model_path="/models/m.gguf",
+                engine="fake-engine",
+                command=["my-own-command"],
+                env={"MINE": "1"},
+            )
+        ],
+    )
+    outcome = orchestrator.run_backend(suite, suite.backends[0])
+    # explicit command wins outright; env merges with user keys taking
+    # precedence over anything the translator generated for the same key
+    assert outcome.result.backend_config["command"] == ["my-own-command"]
+    assert outcome.result.backend_config["env"] == {"GENERATED": "1", "MINE": "1"}
