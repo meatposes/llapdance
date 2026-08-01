@@ -92,6 +92,53 @@ def test_build_screen_generates_valid_suite_yaml(tmp_path):
 
     asyncio.run(scenario())
 
+
+def test_model_browser_configure_button_navigates_to_build_screen(tmp_path):
+    # real bug found from direct user feedback: the app `import`ed Button
+    # but never placed one anywhere - every action required knowing a
+    # keybinding from the Footer's small text. This clicks the actual
+    # button widget, not the underlying action method, to prove the fix.
+    load_builtin_adapters()
+    (tmp_path / "test-model.gguf").write_bytes(b"x")
+
+    async def scenario():
+        app = LLAPDanceApp()
+        async with app.run_test(size=(120, 60)) as pilot:
+            await pilot.pause()
+            screen = app.screen
+            screen.query_one("#scan-dirs", Input).value = str(tmp_path)
+            await pilot.click("#scan-btn")
+            await pilot.pause()
+
+            table = screen.query_one("#models", DataTable)
+            table.move_cursor(row=0)
+            await pilot.click("#configure-btn")
+            await pilot.pause()
+
+            assert isinstance(app.screen, BuildScreen)
+
+    asyncio.run(scenario())
+
+
+def test_build_screen_generate_and_run_buttons_are_clickable(tmp_path):
+    load_builtin_adapters()
+    gguf = tmp_path / "test-model.gguf"
+    gguf.write_bytes(b"x")
+    model = ModelInfo(path=str(gguf), format="gguf", compatible_engines=["qxmx"])
+
+    async def scenario():
+        app = LLAPDanceApp()
+        async with app.run_test() as pilot:
+            await app.push_screen(BuildScreen(model))
+            await pilot.pause()
+            screen = app.screen
+
+            screen.query_one("#image", Input).value = "qxmx:latest"
+            await pilot.click("#generate-btn")
+            await pilot.pause()
+
+            assert screen.query_one("#yaml-preview", TextArea).text != ""
+
     asyncio.run(scenario())
 
 
@@ -105,8 +152,12 @@ def test_build_screen_requires_image_before_generating(tmp_path):
             await app.push_screen(BuildScreen(model))
             await pilot.pause()
             screen = app.screen
+            # the image field auto-fills from real local docker images on
+            # this machine (see _local_image_options) - clear it to
+            # exercise the "no image" path deliberately, not by accident
+            screen.query_one("#image", Input).value = ""
 
-            screen.action_generate()  # no image set
+            screen.action_generate()
             await pilot.pause()
 
             assert screen.query_one("#yaml-preview", TextArea).text == ""

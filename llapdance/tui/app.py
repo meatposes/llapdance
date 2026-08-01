@@ -20,6 +20,18 @@ from llapdance.tui.screens import ModelBrowserScreen
 
 class LLAPDanceApp(App):
     TITLE = "LLAPDance"
+    # Real bug found writing tests for the fixed TUI: Input/Select default
+    # to `width: 100%`, which - inside a Horizontal row next to a Button -
+    # consumes the whole row and pushes the Button off past the visible
+    # screen edge entirely (confirmed via a real pilot test: the button's
+    # region.x landed exactly at the screen's width, i.e. one column past
+    # the last visible one). Constrain the flexible controls to share the
+    # row instead of claiming all of it.
+    CSS = """
+    Horizontal > Input { width: 1fr; }
+    Horizontal > Select { width: 1fr; }
+    Horizontal > Button { width: auto; }
+    """
 
     def __init__(self) -> None:
         super().__init__()
