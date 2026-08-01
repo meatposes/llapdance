@@ -1,0 +1,78 @@
+# Second real backend, same model, proving the harness is portable across
+# engines by config alone - see VALIDATION.md "qxmx" section for the
+# gotchas found bringing this one up (image has no ENTRYPOINT, only CMD;
+# VRAM preflight actually runs for real this time via xpumcli).
+name: validation-qxmx
+
+backends:
+  - name: qxmx-validation
+    source:
+      mode: prebuilt
+      image: "qxmx:latest"
+    model: "Ternary-Bonsai-27B-Q2_0"   # same model as the llama.cpp validation run
+    port: 8080
+    volumes:
+      /mnt/ignite/LLM/huggingface/gguf/Ternary-Bonsai-27B-gguf: /models
+    # GOTCHA: qxmx:latest has no ENTRYPOINT, only a default CMD
+    # (["./build/qxmx_serve"]) - unlike llama-cpp-bonsai (which sets
+    # ENTRYPOINT), overriding `command` here REPLACES that default
+    # entirely, so the binary name must be included as command[0]. Whether
+    # command needs the binary name depends on ENTRYPOINT vs CMD in the
+    # image - `docker inspect --format '{{.Config.Entrypoint}}'` before
+    # writing a new backend's command list.
+    command:
+      - "./build/qxmx_serve"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8080"
+      - "--slots"
+      - "1"
+      - "--ctx-per-slot"
+      - "4096"
+      - "--ctk"
+      - "q8_0"
+      - "/models/Ternary-Bonsai-27B-Q2_0.gguf"
+    # Single render node passthrough (not the whole /dev/dri) - pins qxmx to
+    # one specific physical card. qxmx has no device-selector flag/env at
+    # all (README: "only one GPU is supported" - whichever /dev/dri node(s)
+    # are visible is the whole mechanism), so this IS qxmx's GPU pinning,
+    # not a hint alongside some other selector.
+    devices:
+      - "/dev/dri/renderD131:/dev/dri/renderD131"
+    health_path: "/health"
+    startup_timeout_s: 120
+    network:
+      mode: disabled
+
+# device index 3 here is the xpumcli device_id for the same physical card
+# as renderD131 above (PCI 0000:8a:00.0) - confirmed idle (~32.6GB free)
+# via `probe.discover_devices()` before this suite was written. This index
+# space is xpumcli's own, NOT the old clinfo-based one used in the first
+# validation run - see VALIDATION.md for why these don't correspond.
+device_target:
+  mode: indices
+  indices: [3]
+
+execution_target:
+  mode: local
+
+benchmark_adapters:
+  - adapter: generic-http
+    config:
+      prompt: "In one sentence, what is a hash table?"
+      max_tokens: 64
+      num_requests: 3
+
+coherence_adapters:
+  - adapter: fixed-questions
+    config: {}
+
+storage:
+  flat_file_dir: "./results"
+  extra_adapters: []
+
+# Real VRAM preflight now runs (Intel free-VRAM detection via xpumcli was
+# added this session - see core/probe.py) instead of being bypassed.
+min_free_vram_mb: 4096
+allow_unknown_vram: false

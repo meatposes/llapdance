@@ -53,14 +53,51 @@ These were missing entirely before this validation pass — the spec anticipated
 - Concretely confirmed today: `level_zero:0` = an Intel Arc Pro B70 with only ~3.7GB free at the time (something else was already using it) — still enough headroom for this small quant to load. `level_zero:1` is whatever the already-running production `llama-cpp-bonsai` container is pinned to (untouched, not re-verified today).
 - Intel free-VRAM detection is still unimplemented (`probe.py::free_vram_mb` returns `None` for Intel, fail-closed per SPEC.md §7) — today's run only proceeded because `allow_unknown_vram: true` was set after manually eyeballing the numbers above, exactly the escape hatch the spec described and exactly why it defaults to `false`.
 
+## Second validation run — qxmx backend, same model (2026-08-01)
+
+Goal: prove the harness is portable across engines by config alone, not by
+re-testing llama.cpp again. Used `examples/validation-qxmx.suite.yaml`:
+same `Ternary-Bonsai-27B-Q2_0.gguf` model, different image (`qxmx:latest`,
+a from-scratch custom Intel-Arc inference engine at `~/qxmx`), different
+container name/port/device, run alongside the still-untouched production
+`llama-cpp-bonsai` container.
+
+```
+=== qxmx-validation (f8f3b7c36f8d) ===
+  [generic-http] {'avg_ttft_ms': 506.4, 'avg_total_ms': 2485.1, 'avg_tokens_per_sec': 21.9, 'requests': 3.0}
+  [fixed-questions] 10/10 passed
+```
+
+Worked end to end, same as the llama.cpp run — but only after fixing a real gap and finding two new gotchas:
+
+### Real capability added: Intel VRAM detection (was the last run's unresolved gap)
+
+`xpumcli` (Intel's own GPU management CLI, `/usr/bin/xpumcli`) is installed and gives PCI bus address + exact free/total VRAM per device in one JSON call (`xpumcli discovery -j` / `xpumcli discovery -d N -j`). This directly closes the "Intel free-VRAM detection unimplemented" gap flagged in the first validation run. `core/probe.py` now prefers `xpumcli` for Intel discovery (falling back to `clinfo`, enumeration-only, when xpumcli isn't installed), and `free_vram_mb()` returns a real number for Intel devices discovered this way instead of `None`.
+
+**Confirmed working for real**, not just unit-tested: re-ran the qxmx suite with `--set min_free_vram_mb=999999` and got a real `VramPreflightError` reporting the actual free VRAM (`~25.2GB free, below the 999999MB minimum`) — the preflight check now has teeth on Intel hardware, not just the documented fail-closed placeholder from the last run.
+
+### GOTCHA: at least 4 non-corresponding GPU index spaces exist for the same hardware
+
+Confirmed concretely, not theoretically: the same 4 physical GPUs enumerate as different indices depending on which tool asks — `clinfo` (OpenCL) order, `xpumcli`'s own `device_id` (1-4, not 0-based), llama.cpp's SYCL/level-zero index (separate again, used in the first validation run), and the kernel's DRM card/render node number. **The only thing that ties them together reliably is the PCI bus address.** `core/probe.py`'s `DeviceInfo` now carries `pci_bus_id` and `render_node` (resolved via `/sys/class/drm/renderD*/device` symlinks, vendor-agnostic, no extra tool needed) specifically so future code has one stable key to reconcile across tools — this is the concrete version of SPEC.md §7's "GPU2 identity" open decision. Switching `core/probe.py` to prefer xpumcli also means `DeviceInfo.index` now means something different (xpumcli's 1-based `device_id`) than it did in the first validation run (clinfo's 0-based enumeration) — harmless pre-1.0, but would be a breaking change to any suite config written against the old numbering.
+
+### GOTCHA: whether `command` needs the binary name depends on ENTRYPOINT vs CMD
+
+`llama-cpp-bonsai` sets `ENTRYPOINT ["/app/llama-server"]`, so `BackendConfig.command` only needed the flags. `qxmx:latest` sets no `ENTRYPOINT`, only `CMD ["./build/qxmx_serve"]` — supplying `command` in docker-py *replaces* the default `Cmd` entirely rather than appending to an entrypoint, so the binary path itself had to be `command[0]`. Both look identical from the suite-YAML author's side (just a list of strings) but silently do different things depending on the image. Breadcrumb: **check `docker inspect --format '{{.Config.Entrypoint}}'` on any new backend image before writing its `command` list** — this was caught fast here only because the qxmx binary printed its usage banner to stdout, a broken build with a quieter failure mode could take longer to diagnose.
+
+### GPU choice for this run
+
+Picked device index 3 (xpumcli numbering) / PCI `0000:8a:00.0` / `/dev/dri/renderD131` deliberately — confirmed via `probe.discover_devices()` to be the least-loaded discrete card (~32.6GB free at the time) before writing the suite, specifically to avoid contending with the already-running production `llama-cpp-bonsai` (on a different card) or the heavily-loaded B50 (`0000:84:00.0`, was at ~16.3/16.3GB used, i.e. essentially full). Passed through as a single render node (`--device /dev/dri/renderD131:/dev/dri/renderD131`), not the whole `/dev/dri` directory — qxmx has no device-selector flag or env var at all (its README says "only one GPU is supported" right now), so **which render node(s) are passed through *is* qxmx's entire GPU-pinning mechanism**, not a hint alongside some other selector like llama.cpp's `ONEAPI_DEVICE_SELECTOR`.
+
 ## Updated adapter status (see README.md, now reflects reality instead of aspiration)
 
 | Adapter | Status |
 |---|---|
-| `local-docker` execution | Real, validated against actual GPU hardware today. |
-| `generic-http` benchmark | Real, validated — got real TTFT/throughput numbers from a real llama.cpp server. |
-| `fixed-questions` coherence | Real, validated — 10/10 against a working model. (An earlier draft of this doc claimed it also caught a "tokenizer crash bug" — retracted, see above; that crash was my invalid test setup, not a finding.) |
-| `flat-file` storage | Real, validated — write + delta-lookup both exercised. |
-| `llama-benchy` benchmark | Still a stub — unrelated to today's validation, no new information. |
-| SSH execution target | Not built. Today's `RunningBackend`/`ExecutionTargetAdapter` contract was exercised only locally; nothing here contradicts the contract working remotely, but it's unverified. |
+| `local-docker` execution | Real, validated against two different engines (llama.cpp + qxmx) on real GPU hardware. |
+| `generic-http` benchmark | Real, validated against two different real servers — llama.cpp and qxmx both produced real TTFT/throughput numbers. |
+| `fixed-questions` coherence | Real, validated — 10/10 against two different working backends. (An earlier draft of this doc claimed it also caught a "tokenizer crash bug" — retracted, see above; that crash was my invalid test setup, not a finding.) |
+| `flat-file` storage | Real, validated — write + delta-lookup both exercised, across two backends. |
+| Intel VRAM preflight | Real, validated — `xpumcli`-backed, confirmed to actually reject an impossible VRAM requirement with a real free-memory number, not just documented as a placeholder. |
+| `llama-benchy` benchmark | Still a stub — unrelated to this validation, no new information. |
+| SSH execution target | Not built. `RunningBackend`/`ExecutionTargetAdapter` contract exercised only locally twice; nothing contradicts it working remotely, but it's unverified. |
 | OpenSearch / embedded-DB / Prometheus storage | Not built. |
+| `params.shared` → per-engine `command`/`env` translation | Still not built — both validation runs used raw `command`/`env`/`devices` passthrough. Two real backends now exist as worked examples (`examples/validation.suite.yaml` for llama.cpp-SYCL, `examples/validation-qxmx.suite.yaml` for qxmx) to build that translation layer against. |
