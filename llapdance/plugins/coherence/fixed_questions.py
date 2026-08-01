@@ -38,6 +38,12 @@ class FixedQuestionCoherence(CoherenceAdapter):
         cfg = {**self._config, **config}
         questions = cfg.get("questions", DEFAULT_QUESTIONS)
         model = cfg.get("model", "default")
+        # Real gap found sweeping a reasoning model (OpenVINO/Qwen3-0.6B-int4-ov,
+        # see VALIDATION.md): a hardcoded 64 truncates the <think> trace before
+        # an answer is ever reached, producing a false coherence failure - not
+        # a wrong answer, no answer at all. Configurable per-suite, still
+        # defaults to 64 (unchanged behavior for every already-validated suite).
+        max_tokens = cfg.get("max_tokens", 64)
         judge_cfg = cfg.get("llm_judge")
         judge = (
             OpenAICompatibleClient(
@@ -56,7 +62,7 @@ class FixedQuestionCoherence(CoherenceAdapter):
 
         with httpx.Client(timeout=60, headers=headers) as client:
             for q in questions:
-                answer = self._ask(client, endpoint, model, q["prompt"])
+                answer = self._ask(client, endpoint, model, q["prompt"], max_tokens)
                 lowered = answer.lower()
                 matched = any(kw.lower() in lowered for kw in q["expected_keywords"])
 
@@ -99,10 +105,10 @@ class FixedQuestionCoherence(CoherenceAdapter):
         )
 
     @staticmethod
-    def _ask(client: httpx.Client, endpoint: str, model: str, prompt: str) -> str:
+    def _ask(client: httpx.Client, endpoint: str, model: str, prompt: str, max_tokens: int) -> str:
         resp = client.post(
             endpoint.rstrip("/") + "/v1/chat/completions",
-            json={"model": model, "messages": [{"role": "user", "content": prompt}], "max_tokens": 64},
+            json={"model": model, "messages": [{"role": "user", "content": prompt}], "max_tokens": max_tokens},
         )
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"]

@@ -4,7 +4,15 @@ Live document — updated as work progresses. See VALIDATION.md for the full
 writeup and SPEC_REVIEW.md for the "are we still on track" assessment (now
 partly resolved - see its update note at the top).
 
-## Session complete (2026-08-01, continued) — searched beyond the catalog dir, attempted a real fix, found a genuine engine gap
+## Session complete (2026-08-01, continued) — model-dir/HF-cache cleanup, 3 more catalog models, a real coherence-adapter fix
+
+Also this session: surveyed model storage sprawl (3 disconnected pools, ~1.15TB), found the "17 duplicate" HF-cache overlaps were actually empty 12K stubs (no real duplication), found and cleaned 2 genuinely broken/partial downloads (root-owned files needed sudo), removed 81 empty stub dirs, and confirmed ignite doesn't have room to absorb the full HF cache (~93G free vs 567G needed) - consolidating onto `/mnt/acheron` (3.0T free) or `/mnt/malebolge` (3.6T free) is the real path if that's still wanted.
+
+- [x] **Fixed a real gap**: `FixedQuestionCoherence` hardcoded `max_tokens: 64`, guaranteeing the same reasoning-model truncation false-negative found last session. Now configurable (`max_tokens` in suite config, default unchanged). 2 new tests, 108 passing.
+- [x] Swept 3 more OpenArc models: `Phi-4-mini-instruct-int4-ov` (clean, 10/10), `DeepSeek-R1-Distill-Qwen-7B-int4-ov` with `max_tokens: 512` (clean, 10/10 - **proves the fix above works**), `phi-2-int4-ov` (**real crash, root-caused**: no `chat_template` on the tokenizer, OpenArc's worker dies on first inference and auto-unloads - genuine OpenArc+model incompatibility, not a llapdance bug).
+- [x] Clean teardown confirmed for all three, committed.
+
+## Prior session (2026-08-01, continued) — searched beyond the catalog dir, attempted a real fix, found a genuine engine gap
 
 Direct question: any other models anywhere that work on Arcaine? Searched beyond `/mnt/ignite/LLM/models` (the catalog's only scan target so far) - found two real, fully-downloaded Qwen3.5-family models in `~/.cache/huggingface/hub` the catalog never saw.
 
