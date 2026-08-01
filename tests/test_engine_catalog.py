@@ -20,6 +20,20 @@ def test_describe_engine_returns_declared_params_for_each_reference_engine():
     assert "context_size" not in openarc  # not applicable, different config surface
     assert "openarc_engine" in openarc
 
+    vllm = describe_engine("vllm")["params"]
+    assert "context_size" in vllm
+    assert vllm["context_size"]["maps_to"] == "--max-model-len"
+    assert "trust_remote_code" in vllm  # needed for custom modeling_*.py checkpoints, e.g. DeepSeek-V2
+
+
+def test_describe_engine_returns_known_env_flags_for_vllm():
+    load_builtin_adapters()
+    env_flags = describe_engine("vllm")["env_flags"]
+    # real env vars confirmed via `docker inspect` of the real running
+    # vllm-urak container, not guessed - see VALIDATION.md
+    assert "ONEAPI_DEVICE_SELECTOR" in env_flags
+    assert "VLLM_TARGET_DEVICE" in env_flags
+
 
 def test_describe_engine_returns_known_env_flags_for_llama_cpp_sycl():
     load_builtin_adapters()

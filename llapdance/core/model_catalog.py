@@ -37,7 +37,12 @@ from llapdance.core.result import RunResult
 COMPATIBLE_ENGINES: dict[str, list[str]] = {
     "gguf": ["llama-cpp-sycl", "qxmx"],
     "openvino_ir": ["openarc"],
-    "safetensors": ["arcaine"],
+    # arcaine only dispatches a narrow model_type allowlist (see
+    # llapdance/plugins/engine/arcaine.py); vllm has no such restriction -
+    # any HF-transformers-format safetensors checkpoint is a plausible fit
+    # (confirmed real: gemma3/qwen3/deepseek_v2 all load under vLLM natively,
+    # see VALIDATION.md "vLLM engine translator" section).
+    "safetensors": ["arcaine", "vllm"],
 }
 
 _GGUF_QUANT_RE = re.compile(

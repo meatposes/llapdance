@@ -5,6 +5,7 @@ from llapdance.plugins.engine.arcaine import ArcaineEngine
 from llapdance.plugins.engine.llama_cpp_sycl import LlamaCppSyclEngine
 from llapdance.plugins.engine.openarc import OpenArcEngine
 from llapdance.plugins.engine.qxmx import QxmxEngine
+from llapdance.plugins.engine.vllm import VLLMEngine
 
 DEVICE = DeviceInfo(index=3, vendor="intel", name="Arc B70", integrated=False, pci_bus_id="0000:8a:00.0", render_node="/dev/dri/renderD131")
 DEVICE_NO_RENDER_NODE = DeviceInfo(index=0, vendor="intel", name="Arc B70 (clinfo)", integrated=False)
@@ -162,3 +163,61 @@ class TestOpenArc:
     def test_device_without_render_node_raises(self):
         with pytest.raises(ValueError, match="render_node"):
             OpenArcEngine().build(model_path="/m", params={}, port=8000, device=DEVICE_NO_RENDER_NODE)
+
+
+class TestVLLM:
+    def test_minimal_params_matches_real_running_container(self):
+        # real CLI shape confirmed via `docker inspect vllm-urak` (see
+        # VALIDATION.md "vLLM engine translator" section), not guessed
+        inv = VLLMEngine().build(model_path="/models/x", params={}, port=8000, device=DEVICE)
+        assert inv.command == ["/models/x", "--host", "0.0.0.0", "--port", "8000", "--tensor-parallel-size", "1"]
+        assert inv.env == {}
+        # NOT a single render node like every other engine here - a real
+        # live validation crash (oneCCL opendir failure) confirmed vLLM
+        # needs the whole /dev/dri directory passed through, matching
+        # vllm-urak's actual HostConfig.Devices - see module docstring
+        assert inv.devices == ["/dev/dri:/dev/dri"]
+
+    def test_tuning_params_translate_to_real_flags(self):
+        inv = VLLMEngine().build(
+            model_path="/models/x",
+            params={
+                "served_model_name": "my-model",
+                "context_size": 128000,
+                "tensor_parallel_size": 2,
+                "kv_cache_dtype": "fp8",
+                "max_num_seqs": 2,
+                "max_num_batched_tokens": 16384,
+                "block_size": 64,
+                "reasoning_parser": "qwen3",
+                "tool_call_parser": "qwen3_xml",
+                "trust_remote_code": True,
+                "enable_auto_tool_choice": True,
+                "language_model_only": True,
+            },
+            port=8000,
+            device=DEVICE,
+        )
+        for flag, value in [
+            ("--served-model-name", "my-model"),
+            ("--max-model-len", "128000"),
+            ("--tensor-parallel-size", "2"),
+            ("--kv-cache-dtype", "fp8"),
+            ("--max-num-seqs", "2"),
+            ("--max-num-batched-tokens", "16384"),
+            ("--block-size", "64"),
+            ("--reasoning-parser", "qwen3"),
+            ("--tool-call-parser", "qwen3_xml"),
+        ]:
+            assert flag in inv.command
+            assert inv.command[inv.command.index(flag) + 1] == value
+        for presence_flag in ["--trust-remote-code", "--enable-auto-tool-choice", "--language-model-only"]:
+            assert presence_flag in inv.command
+
+    def test_no_device_means_no_devices_list(self):
+        inv = VLLMEngine().build(model_path="/m", params={}, port=8000, device=None)
+        assert inv.devices == []
+
+    def test_device_without_render_node_raises(self):
+        with pytest.raises(ValueError, match="render_node"):
+            VLLMEngine().build(model_path="/m", params={}, port=8000, device=DEVICE_NO_RENDER_NODE)
