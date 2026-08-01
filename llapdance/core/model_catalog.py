@@ -27,6 +27,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from llapdance.core.result import RunResult
+
 # Engine translator names (llapdance/plugins/engine/) that can load each
 # format - informational, "could run on", see module docstring. Kept here
 # rather than on each EngineTranslator because format compatibility is a
@@ -44,12 +46,44 @@ _GGUF_QUANT_RE = re.compile(
 
 
 @dataclass
+class TestedStatus:
+    """A real prior run found in stored results (SPEC.md §8 flat-file
+    records) for this model on this engine - never inferred, only ever
+    built from an actual RunResult.
+
+    outcome is one of:
+      "pass"    - every coherence adapter that ran got a clean 100% pass rate
+      "partial" - at least one coherence adapter ran and had failures
+      "ran"     - the run completed and got recorded, but no coherence
+                  adapter was configured, so there's no correctness signal,
+                  only "it started and didn't crash"
+
+    NOTE the real gap this can't cover: `run_backend` only writes a
+    RunResult after the run finishes (see orchestrator.py's `finally:
+    execution.stop(running)` wrapping `_run_adapters_with_telemetry` before
+    storage). A run that crashed mid-request (like the real Arcaine
+    KV-cache 500 found this session, see VALIDATION.md) never reaches
+    storage at all - there is no stored record to find, so a genuinely
+    broken model/engine/flag combination looks identical to "never tried"
+    here, not "tried and failed". Cross-check VALIDATION.md/session notes
+    for crash history this can't see.
+    """
+
+    engine: str
+    run_id: str
+    timestamp: float
+    outcome: str
+    coherence_summary: str | None = None
+
+
+@dataclass
 class ModelInfo:
     path: str
     format: str  # "gguf" | "openvino_ir" | "safetensors"
     compatible_engines: list[str] = field(default_factory=list)
     quant_hint: str = "unknown"
     size_bytes: int = 0
+    tested: dict[str, TestedStatus] = field(default_factory=dict)
 
 
 def _dir_size(path: Path) -> int:
@@ -150,3 +184,77 @@ def scan_models(directories: list[str]) -> list[ModelInfo]:
                 dirnames[:] = []
 
     return results
+
+
+def load_run_history(results_dir: str) -> list[RunResult]:
+    """Reads every stored RunResult from a flat-file results directory
+    (SPEC.md §8). Skips files that don't parse as a RunResult (e.g. the
+    catalog's own `_image_labels.json` living alongside it - see
+    llapdance/core/catalog.py) rather than raising, since a directory
+    scan shouldn't hard-fail on an unrelated file."""
+    results: list[RunResult] = []
+    base = Path(results_dir)
+    if not base.is_dir():
+        return results
+    for f in base.glob("*.json"):
+        try:
+            results.append(RunResult.model_validate_json(f.read_text()))
+        except (json.JSONDecodeError, ValueError, OSError):
+            continue
+    return results
+
+
+def _resolve_host_path(model_path: str, volumes: dict[str, str]) -> str | None:
+    """Reverses a BackendConfig's host->container volume mount to recover
+    the host path a run's in-container `model_path` actually pointed at -
+    the only way to line a stored RunResult back up against a ModelInfo
+    (which is always a host path), since RunResult only ever records the
+    container-side path directly."""
+    for host_vol, container_vol in volumes.items():
+        if model_path == container_vol:
+            return host_vol
+        prefix = container_vol.rstrip("/") + "/"
+        if model_path.startswith(prefix):
+            return str(Path(host_vol) / model_path[len(prefix):])
+    return None
+
+
+def _run_outcome(result: RunResult) -> tuple[str, str | None]:
+    if not result.coherence:
+        return "ran", None
+    total = sum(c.total for c in result.coherence)
+    passed = sum(c.passed for c in result.coherence)
+    summary = f"{passed}/{total}"
+    return ("pass" if total and passed == total else "partial"), summary
+
+
+def annotate_tested_status(models: list[ModelInfo], history: list[RunResult]) -> None:
+    """Cross-references real stored run history against the (purely
+    static, format-based) model catalog - mutates each ModelInfo.tested
+    in place. Only ever reports what's actually in a stored RunResult;
+    see TestedStatus's docstring for the real gap (crashed runs never
+    reach storage, so they're indistinguishable from untested here)."""
+    by_path = {str(Path(m.path)): m for m in models}
+
+    for result in sorted(history, key=lambda r: r.timestamp):
+        engine = result.backend_config.get("engine")
+        model_path = result.backend_config.get("model_path")
+        volumes = result.backend_config.get("volumes", {})
+        if not engine or not model_path:
+            continue
+        host_path = _resolve_host_path(model_path, volumes)
+        if host_path is None:
+            continue
+        model = by_path.get(str(Path(host_path)))
+        if model is None:
+            continue
+        outcome, summary = _run_outcome(result)
+        # sorted ascending by timestamp above, so the last write for a
+        # given engine is always the most recent - no explicit max needed.
+        model.tested[engine] = TestedStatus(
+            engine=engine,
+            run_id=result.run_id,
+            timestamp=result.timestamp,
+            outcome=outcome,
+            coherence_summary=summary,
+        )

@@ -4,7 +4,17 @@ Live document — updated as work progresses. See VALIDATION.md for the full
 writeup and SPEC_REVIEW.md for the "are we still on track" assessment (now
 partly resolved - see its update note at the top).
 
-## Session complete (2026-08-01, continued) — real Qwen3.5 sweep, stale-image bug found+fixed
+## Session complete (2026-08-01, continued) — model catalog now shows real test history
+
+Direct follow-up to a question: did the model catalog indicate whether a model actually ran (pass/fail) on a backend before, vs just could-run-on? It didn't. Built it:
+
+- [x] `ModelInfo.tested: dict[engine, TestedStatus]`, built by `annotate_tested_status()` reversing each stored `RunResult`'s volume mount to recover the host path it actually tested, cross-referenced against the catalog scan. Outcome: `pass` / `partial` / `ran` (no coherence adapter configured).
+- [x] Documented the real gap honestly: a crashed run never reaches storage, so it's indistinguishable from "never tried" - can't be fixed without also persisting failed attempts, out of scope for now.
+- [x] Wired into `llapdance models --results-dir DIR` (CLI) and MCP `list_models(results_dir=...)`.
+- [x] **Validated live** against today's own real results - correctly showed `unsloth/Qwen3.6-27B-NVFP4` as the more-recent (worse) of its two real runs, `sakamakismile/Huihui-...` as a clean pass, and honestly reported `RedHatAI/diffusiongemma-...` as untested (its earlier session's result file isn't in the current results dir - no fabrication).
+- [x] 8 new tests, 106 passed total, committed.
+
+## Also this session — second Qwen3.5 model validated, real Qwen3.5 sweep, stale-image bug found+fixed
 
 Direct request: find a real local Qwen3.5/3.6 model Arcaine supports, sweep for optimal flags.
 

@@ -21,7 +21,7 @@ from llapdance.core.catalog import LabeledImageRemovalError
 from llapdance.core.catalog import label_image as catalog_label_image
 from llapdance.core.catalog import list_images as catalog_list_images
 from llapdance.core.catalog import remove_image as catalog_remove_image
-from llapdance.core.model_catalog import scan_models
+from llapdance.core.model_catalog import annotate_tested_status, load_run_history, scan_models
 from llapdance.core.orchestrator import run_suite as orchestrator_run_suite
 from llapdance.core.result import RunResult
 from llapdance.plugins import registry
@@ -154,13 +154,19 @@ def remove_image(
 
 
 @server.tool()
-def list_models(directories: list[str]) -> list[dict[str, Any]]:
+def list_models(directories: list[str], results_dir: str = "./results") -> list[dict[str, Any]]:
     """Scan directories for models, reporting format + quant hint + which
     registered engines could plausibly load each (format-compatible, not
-    a guarantee it will run)."""
+    a guarantee it will run), plus real prior test outcomes cross-referenced
+    from results_dir (a `tested` dict keyed by engine name - empty means no
+    stored run was found, which includes both genuinely-untested models AND
+    runs that crashed before a result could be written, see
+    TestedStatus's docstring in model_catalog.py)."""
     from dataclasses import asdict
 
-    return [asdict(m) for m in scan_models(directories)]
+    models = scan_models(directories)
+    annotate_tested_status(models, load_run_history(results_dir))
+    return [asdict(m) for m in models]
 
 
 def main() -> None:

@@ -11,7 +11,7 @@ from llapdance.core.catalog import LabeledImageRemovalError
 from llapdance.core.catalog import label_image as catalog_label_image
 from llapdance.core.catalog import list_images as catalog_list_images
 from llapdance.core.catalog import remove_image as catalog_remove_image
-from llapdance.core.model_catalog import scan_models
+from llapdance.core.model_catalog import annotate_tested_status, load_run_history, scan_models
 from llapdance.core.orchestrator import run_suite
 from llapdance.plugins.registry import available, describe_engine, load_builtin_adapters
 
@@ -142,12 +142,27 @@ def images_rm(image_ref, force, catalog_dir, host, user, ssh_key_path) -> None:
 
 @main.command("models")
 @click.argument("directories", nargs=-1, required=True)
-def models_cmd(directories: tuple[str, ...]) -> None:
+@click.option(
+    "--results-dir",
+    default="./results",
+    show_default=True,
+    help="Flat-file results directory to cross-reference for real prior run "
+    "outcomes per model+engine (see 'tested' column). A crashed run never "
+    "reaches storage, so it's indistinguishable from untested here.",
+)
+def models_cmd(directories: tuple[str, ...], results_dir: str) -> None:
     """Scan directories for models, reporting format + quant hint + which
     registered engines could plausibly load each (format-compatible, not
-    a guarantee it will run - see llapdance/core/model_catalog.py)."""
-    for model in scan_models(list(directories)):
-        click.echo(f"{model.format:12} {model.quant_hint:24} {model.compatible_engines}  {model.path}")
+    a guarantee it will run - see llapdance/core/model_catalog.py), plus
+    real prior test outcomes cross-referenced from --results-dir."""
+    models = scan_models(list(directories))
+    annotate_tested_status(models, load_run_history(results_dir))
+    for model in models:
+        tested = (
+            ", ".join(f"{engine}:{status.outcome}({status.coherence_summary or 'n/a'})" for engine, status in model.tested.items())
+            or "untested"
+        )
+        click.echo(f"{model.format:12} {model.quant_hint:24} {model.compatible_engines}  tested=[{tested}]  {model.path}")
 
 
 @main.command()
