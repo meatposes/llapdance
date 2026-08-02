@@ -153,6 +153,10 @@ Direct question: is there any mechanism stopping an architecturally-incompatible
 
 Still open, not done this session: mmproj-*.gguf companion/projector files get scanned as standalone models in the TUI/CLI model catalog - cosmetic/confusion issue, not yet fixed.
 
+## Twenty-sixth session addendum
+
+mmproj files now hidden from model tables, `(m)` indicator on their real siblings instead. Bigger finding: `llama-cpp-sycl`/`llama-cpp-intel`/`llama-cpp-bonsai` are confirmed the same SYCL backend under different tags (image_hints broadened to cover all 3); `llama-cpp-vulkan` is a genuinely different GGML backend (Vulkan, no oneAPI) that had NO engine translator at all until now - added `llama-cpp-vulkan` (real GGML_VK_* env catalog, sourced from the actual local Vulkan checkout). Found and worked around a real gotcha: `llama-cpp-vulkan:newmeat2`'s ENTRYPOINT is `/app/tools.sh`, not `/app/llama-server` - excluded from image_hints on purpose, documented as a breadcrumb (check `docker inspect` Entrypoint before trusting any new tag). Vulkan translator's GPU pinning is unvalidated live (SYCL's is) - open item below. 146 passing.
+
 ## Recommended next session
 
 Per the (now mostly-addressed) spec review, remaining real gaps in priority order:
@@ -171,6 +175,8 @@ Per the (now mostly-addressed) spec review, remaining real gaps in priority orde
 - No embedded-DB or Prometheus storage adapter.
 - No web UI (TUI + CLI + MCP now).
 - AMD GPU support unimplemented.
+- `llama-cpp-vulkan`'s GPU pinning (single render-node passthrough) is unvalidated live - assumed by analogy to the SYCL translator's confirmed behavior, needs a real Vulkan container boot to confirm.
+- `local_docker` execution has no per-backend ENTRYPOINT override - means any image whose default entrypoint isn't the servable binary (like `llama-cpp-vulkan:newmeat2`'s `/app/tools.sh`) can't be used through this harness at all right now, only worked around by excluding such tags from `image_hints`.
 
 ## How to pick this up
 

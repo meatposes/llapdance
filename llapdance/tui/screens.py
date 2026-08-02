@@ -38,6 +38,7 @@ from llapdance.plugins.registry import available, describe_engine
 # step shows it and lets a human correct it before running.
 _ENGINE_HEALTH_PATH_HINTS: dict[str, str] = {
     "llama-cpp-sycl": "/health",
+    "llama-cpp-vulkan": "/health",  # same llama-server binary/health endpoint as llama-cpp-sycl
     "qxmx": "/health",
     "arcaine": "/v1/models",  # Arcaine has no /health endpoint at all - confirmed via a live container
     "openarc": "/v1/models",  # returns 200 with an empty model list before any model is loaded
@@ -84,6 +85,17 @@ def _short_model_name(path: str) -> str:
     scan root prefix repeated on every row."""
     parts = Path(path).parts
     return "/".join(parts[-2:]) if len(parts) >= 2 else path
+
+
+def _model_name_cell(m: ModelInfo) -> str:
+    """Table-cell text for a model's name column: the short relative name
+    plus a compact `(m)` indicator when a sibling mmproj (multimodal
+    projector) file exists alongside it (see `ModelInfo.has_mmproj`) -
+    direct user feedback: hide the mmproj files themselves as their own
+    rows (they aren't standalone models), but don't hide the fact that one
+    exists, since it matters for e.g. vision-capable serving."""
+    name = _short_model_name(m.path)
+    return f"{name} (m)" if m.has_mmproj else name
 
 
 def _tested_summary(model: ModelInfo) -> str:
@@ -169,7 +181,7 @@ class ModelBrowserScreen(Screen):
         self._models = scan_models(dirs)
         annotate_tested_status(self._models, load_run_history("./results"))
         for m in self._models:
-            table.add_row(_short_model_name(m.path), m.format, m.quant_hint, ", ".join(m.compatible_engines) or "-", _tested_summary(m))
+            table.add_row(_model_name_cell(m), m.format, m.quant_hint, ", ".join(m.compatible_engines) or "-", _tested_summary(m))
         status = self.query_one("#status", Static)
         if self._models:
             status.update(f"{len(self._models)} found. Pick a row, click Configure.")
@@ -215,7 +227,8 @@ def _engine_info_text(engine: str) -> str:
     info = describe_engine(engine)
     params = _short_list(list(info["params"].keys()))
     env_flags = _short_list(list(info["env_flags"].keys()))
-    return f"[b]{engine}[/b] params: {params} | env: {env_flags}"
+    images = _short_list(info["image_hints"])
+    return f"[b]{engine}[/b] params: {params} | env: {env_flags} | images: {images}"
 
 
 class BackendBrowserScreen(Screen):
@@ -273,7 +286,7 @@ class BackendBrowserScreen(Screen):
         self._models.sort(key=lambda m: engine not in m.compatible_engines)
         for m in self._models:
             compatible = "yes" if engine in m.compatible_engines else "no"
-            table.add_row(_short_model_name(m.path), m.format, m.quant_hint, compatible, _tested_summary(m))
+            table.add_row(_model_name_cell(m), m.format, m.quant_hint, compatible, _tested_summary(m))
         status = self.query_one("#status", Static)
         n_compatible = sum(1 for m in self._models if engine in m.compatible_engines)
         status.update(f"{n_compatible}/{len(self._models)} compatible with {engine}.")

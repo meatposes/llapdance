@@ -644,6 +644,34 @@ This is still a hint, not an enforced guarantee (documented on the attribute its
 
 2 new/updated tests (`describe_engine`'s empty-catalog shape now includes `image_hints: []`), 140 passing total.
 
+## Twenty-sixth session — mmproj hiding, reconciling the real llama.cpp image sprawl
+
+Two direct requests: (1) hide mmproj companion files from model tables, but keep a compact indicator of their existence; (2) a real, sharper gap - "llama-cpp-sycl and llama-cpp and llama-cpp-intel and llama-cpp are treated as different?" - reconcile the local llama.cpp image sprawl (`llama-cpp-intel:meaton`, `llama-cpp-sycl:meat4-dnnfix`, `llama-cpp-bonsai:meat6-hardened`, `llama-cpp-vulkan:prism-bonsai`, `llama-cpp-vulkan:newmeat2`, built "almost daily") against the harness's engine model, which only ever had one llama.cpp translator.
+
+**mmproj**: `scan_models()` (`llapdance/core/model_catalog.py`) now excludes any `*.gguf` file with `"mmproj"` in its name from results entirely, but adds `ModelInfo.has_mmproj: bool` - True when a sibling mmproj file exists in the same directory. TUI tables (`_model_name_cell` in `llapdance/tui/screens.py`) append ` (m)` to the short name when set. Real effect on `/mnt/ignite/LLM/models`: 18 gguf rows -> 13, the 5 removed were all genuine mmproj companions, `(m)` correctly appears on their real siblings (e.g. `Ternary-Bonsai-27B-gguf/Ternary-Bonsai-27B-Q2_0.gguf (m)`).
+
+**llama.cpp image reconciliation - investigated for real, not assumed**: `docker run --entrypoint sh <image> -c "ls /app | grep ggml"` against all 5 local tags, plus `docker inspect` for baked-in env and ENTRYPOINT:
+
+| tag | GGML backend lib | oneAPI env baked in | ENTRYPOINT |
+|---|---|---|---|
+| `llama-cpp-intel:meaton` | `libggml-sycl.so` | yes | `/app/llama-server` |
+| `llama-cpp-sycl:meat4-dnnfix` | `libggml-sycl.so` | yes | `/app/llama-server` |
+| `llama-cpp-bonsai:meat6-hardened` | `libggml-sycl.so` | yes | `/app/llama-server` |
+| `llama-cpp-vulkan:prism-bonsai` | `libggml-vulkan.so` | no | `/app/llama-server` |
+| `llama-cpp-vulkan:newmeat2` | `libggml-vulkan.so` | no | **`/app/tools.sh`** |
+
+Confirms: `llama-cpp-intel`/`llama-cpp-sycl`/`llama-cpp-bonsai` are genuinely the SAME backend (SYCL) under different tag names/build dates - correctly one engine. `llama-cpp-vulkan` is genuinely a DIFFERENT GGML backend (Vulkan, no oneAPI at all) - there was previously NO translator for it at all; any Vulkan image had to go through raw `command`/`env` passthrough, no TUI/CLI convenience path.
+
+**Fixed**: broadened `llama-cpp-sycl`'s `image_hints` to all three real SYCL tags (`llama-cpp-bonsai:*`, `llama-cpp-sycl:*`, `llama-cpp-intel:*`). Added a new `llama-cpp-vulkan` engine translator (`llapdance/plugins/engine/llama_cpp_vulkan.py`) - same `params.shared` mapping as the SYCL translator (llama.cpp's CLI is backend-agnostic for these), but its own real `GGML_VK_*` env-flag catalog (found by reading this project's actual local Vulkan checkout, `~/llama.cpp.git/llama.cpp.prism/ggml/src/ggml-vulkan/ggml-vulkan.cpp`'s `getenv()` call sites - not guessed, not the SYCL flag list). Registered, added to `COMPATIBLE_ENGINES["gguf"]` in `model_catalog.py` (gguf models now correctly show all 3 llama.cpp-family engines plus qxmx).
+
+**Real gotcha found and deliberately NOT papered over**: `llama-cpp-vulkan:newmeat2`'s `ENTRYPOINT` is `/app/tools.sh`, not `/app/llama-server` - despite containing a working llama-server binary + `libggml-vulkan.so` internally. This harness's `local_docker` execution adapter has no per-backend entrypoint override, so pointing this translator at that tag would silently append llama-server flags to `tools.sh`'s argv instead of running the server. `llama-cpp-vulkan`'s `image_hints` is therefore deliberately narrow (`["llama-cpp-vulkan:prism*"]`, not a blanket `llama-cpp-vulkan:*`) to exclude it - documented in the engine's own docstring as a real breadcrumb: check `docker inspect --format '{{.Config.Entrypoint}}'` on any newly built tag before trusting it fits this translator, same practice as the earlier qxmx/bonsai CMD-vs-ENTRYPOINT gotcha.
+
+GPU pinning for the new Vulkan translator is NOT validated live this session (unlike SYCL's, which was) - documented as an open assumption in the file's own docstring, not silently inherited as "confirmed" from the SYCL translator's real validation.
+
+Verified live: `_local_image_options("llama-cpp-sycl")` now correctly returns all 3 real SYCL tags; `_local_image_options("llama-cpp-vulkan")` returns only `llama-cpp-vulkan:prism-bonsai`, never `newmeat2`. A real Ternary-Bonsai model's engine dropdown now lists `llama-cpp-sycl`, `llama-cpp-vulkan`, `qxmx`; switching to `llama-cpp-vulkan` correctly fills the image field with `llama-cpp-vulkan:prism-bonsai`.
+
+8 new tests (mmproj hiding/flagging, `llama-cpp-vulkan` translator behavior mirroring the SYCL test suite, image_hints exclusion check), 146 passing total.
+
 ## Updated adapter status (see README.md, now reflects reality instead of aspiration)
 
 | Adapter | Status |

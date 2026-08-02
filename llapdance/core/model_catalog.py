@@ -35,7 +35,7 @@ from llapdance.core.result import RunResult
 # property of the FORMAT, not of any one engine's params (unlike
 # sweepable_params, which is genuinely per-engine).
 COMPATIBLE_ENGINES: dict[str, list[str]] = {
-    "gguf": ["llama-cpp-sycl", "qxmx"],
+    "gguf": ["llama-cpp-sycl", "llama-cpp-vulkan", "qxmx"],
     "openvino_ir": ["openarc"],
     # arcaine only dispatches a narrow model_type allowlist (see
     # llapdance/plugins/engine/arcaine.py); vllm has no such restriction -
@@ -89,6 +89,17 @@ class ModelInfo:
     quant_hint: str = "unknown"
     size_bytes: int = 0
     tested: dict[str, TestedStatus] = field(default_factory=dict)
+    has_mmproj: bool = False
+    """True if a sibling `*mmproj*.gguf` file (a multimodal-projector
+    companion artifact, not a standalone servable model - see
+    `_MMPROJ_RE`) exists in the same directory as this model. Direct user
+    feedback: these companion files were being scanned and listed as their
+    own independent "models", which is real clutter/confusion (they load
+    as valid GGUF files, so nothing structural rejected them, even though
+    running one alone as the main model is never a meaningful test) - now
+    excluded from scan results entirely, with this flag surfacing the same
+    information as a small indicator on the model(s) they belong to
+    instead of a hidden fact."""
 
 
 def _dir_size(path: Path) -> int:
@@ -148,8 +159,16 @@ def scan_models(directories: list[str]) -> list[ModelInfo]:
         if not base_path.is_dir():
             continue
 
-        # GGUF: standalone files, found anywhere under the tree.
-        for gguf_file in base_path.rglob("*.gguf"):
+        # GGUF: standalone files, found anywhere under the tree. mmproj
+        # companion files (multimodal-projector artifacts, not standalone
+        # servable models - see ModelInfo.has_mmproj) are excluded from
+        # results entirely, but their directory is noted so sibling real
+        # models in the same directory can be flagged as having one.
+        gguf_files = list(base_path.rglob("*.gguf"))
+        mmproj_dirs = {f.parent for f in gguf_files if "mmproj" in f.name.lower()}
+        for gguf_file in gguf_files:
+            if "mmproj" in gguf_file.name.lower():
+                continue
             results.append(
                 ModelInfo(
                     path=str(gguf_file),
@@ -157,6 +176,7 @@ def scan_models(directories: list[str]) -> list[ModelInfo]:
                     compatible_engines=COMPATIBLE_ENGINES["gguf"],
                     quant_hint=_gguf_quant_hint(gguf_file.name),
                     size_bytes=gguf_file.stat().st_size,
+                    has_mmproj=gguf_file.parent in mmproj_dirs,
                 )
             )
 
