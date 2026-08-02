@@ -41,6 +41,7 @@ class LLAPDanceApp(App):
     Horizontal > Select { width: 1fr; }
     Horizontal > Button { width: auto; }
     DataTable { height: 12; }
+    #sweep-axes { height: 4; }
     """
 
     def __init__(self) -> None:

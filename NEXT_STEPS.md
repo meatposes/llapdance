@@ -157,6 +157,12 @@ Still open, not done this session: mmproj-*.gguf companion/projector files get s
 
 mmproj files now hidden from model tables, `(m)` indicator on their real siblings instead. Bigger finding: `llama-cpp-sycl`/`llama-cpp-intel`/`llama-cpp-bonsai` are confirmed the same SYCL backend under different tags (image_hints broadened to cover all 3); `llama-cpp-vulkan` is a genuinely different GGML backend (Vulkan, no oneAPI) that had NO engine translator at all until now - added `llama-cpp-vulkan` (real GGML_VK_* env catalog, sourced from the actual local Vulkan checkout). Found and worked around a real gotcha: `llama-cpp-vulkan:newmeat2`'s ENTRYPOINT is `/app/tools.sh`, not `/app/llama-server` - excluded from image_hints on purpose, documented as a breadcrumb (check `docker inspect` Entrypoint before trusting any new tag). Vulkan translator's GPU pinning is unvalidated live (SYCL's is) - open item below. 146 passing.
 
+## Twenty-seventh session addendum
+
+Real gap fixed: llama-cpp-sycl's known_env_flags catalog was missing 15 of 18 real flags (built from a naive `grep getenv(` that missed every flag read via ggml-sycl's own `ggml_sycl_get_env()` wrapper) - re-derived from the local llama.cpp checkout, now includes `GGML_SYCL_ENABLE_GRAPH` (the user's own "graph on/off" example, gated behind a build-time cmake flag - worth checking a container's own startup log before trusting a sweep of it) plus oneDNN/MKL/fusion/async-mem toggles. Arcaine/qxmx/vLLM/OpenArc catalogs NOT re-audited this session - still open.
+
+TUI sweep was single-axis only; added a `+ axis` button + a height-capped `#sweep-axes` box holding one `param=values` line per axis, parsed and combined into the real cartesian-product sweep mechanism (which already supported multiple axes - only the TUI input was the bottleneck). 151 passing.
+
 ## Recommended next session
 
 Per the (now mostly-addressed) spec review, remaining real gaps in priority order:

@@ -672,6 +672,22 @@ Verified live: `_local_image_options("llama-cpp-sycl")` now correctly returns al
 
 8 new tests (mmproj hiding/flagging, `llama-cpp-vulkan` translator behavior mirroring the SYCL test suite, image_hints exclusion check), 146 passing total.
 
+## Twenty-seventh session — real llama-cpp-sycl flag catalog gap, multi-axis TUI sweep
+
+Two direct complaints: (1) sweep options are missing real performance-tuning flags - "look through for the actual flags that do things like turn on and off graph for intel"; (2) sweeping in the TUI was "one at a time" - needs the ability to sweep several params together.
+
+**Flag catalog gap - real, confirmed via source, not guessed**: `llama_cpp_sycl.py`'s `known_env_flags` was built from a naive `grep getenv(` (3 flags) that completely missed every flag read through ggml-sycl's own `ggml_sycl_get_env()` wrapper (`ggml/src/ggml-sycl/common.cpp`) instead of a bare `getenv()` call. Re-derived from this project's own local checkout (`~/llama.cpp.git/llama.cpp`, the most recent of several local llama.cpp checkouts, `2026-07-31`) - every real call site across `ggml-sycl.cpp`/`fattn.cpp`/`fattn-mkl.cpp`. Found exactly what the user's own example ("graph on/off for intel") turned out to be: `GGML_SYCL_ENABLE_GRAPH` (default 0) - SYCL command-graph capture/replay, with a real gotcha of its own: it's gated behind a BUILD-TIME cmake option (`GGML_SYCL_GRAPH`) - if an image wasn't compiled with it, the env var is a silent no-op (the binary logs "graph disabled by compile flag" at its own startup, confirmed by reading the log-emitting code). 18 real flags now cataloged total (was 3), including oneDNN/MKL flash-attention path toggles (`GGML_SYCL_ENABLE_DNN`, `GGML_SYCL_FA_ONEDNN`, `GGML_SYCL_ENABLE_MKL_FA`), op-fusion (`GGML_SYCL_ENABLE_FUSION`), async memory ops, and the level-zero-vs-generic-SYCL-API selector - each with its real default value where the source states one.
+
+Scope note: this pass focused on `llama-cpp-sycl` specifically (the concrete example raised); Arcaine's/qxmx's/vLLM's/OpenArc's catalogs were NOT re-audited for similar gaps this session - Arcaine in particular already has a known-incomplete NVFP4/MoE flag set flagged in an earlier NEXT_STEPS entry, still open.
+
+**Multi-axis sweep in the TUI**: `BuildScreen`'s sweep control was a single `Select` + single `Input`, generating exactly one `SweepAxis`. Added a `+ axis` button and a new `#sweep-axes` `TextArea` (height-capped at 4 rows - re-verified at a real 100x30 terminal that every button, including the new one, stays visible, same discipline as the earlier DataTable-height fix) holding one `param=values` line per axis. Clicking `+ axis` appends the current param/values builder row as a new line and clears the builder for reuse; the box is also directly hand-editable. `action_generate()` now parses every line via the new `_parse_sweep_axes_text()` helper AND folds in whatever's still sitting unclicked in the builder row, so a single-axis sweep still needs no extra click. Status message now reports the real total run count as the product of every axis's value count (`N runs, sweeping paramA, paramB`), not just one param's length.
+
+The underlying multi-axis mechanism itself was never the gap - `llapdance/config/sweep.py`'s cartesian-product expansion already supported any number of axes (validated in an earlier session with a single axis); only the TUI's input surface was artificially single-axis.
+
+Verified live: a real pilot at `size=(100, 30)` (matching the earlier DataTable-height validation) confirms `add-sweep-btn` and all three action buttons stay visible and clickable; a real click on `+ axis` correctly appends `params.shared.context_size=2048,4096` to the box; `Generate` with that plus a second unclicked builder-row axis produces `Generated (4 runs, sweeping params.shared.context_size, params.shared.parallel_slots)`.
+
+7 new tests (flag-line parsing incl. malformed-line rejection, add-axis button behavior, multi-axis YAML generation + run-count math), 151 passing total.
+
 ## Updated adapter status (see README.md, now reflects reality instead of aspiration)
 
 | Adapter | Status |

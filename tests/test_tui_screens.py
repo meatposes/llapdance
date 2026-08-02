@@ -1,6 +1,7 @@
 import asyncio
 from unittest.mock import patch
 
+import pytest
 import yaml
 from textual.widgets import DataTable, Input, Select, Static, TextArea
 
@@ -16,6 +17,7 @@ from llapdance.tui.screens import (
     _coerce_sweep_value,
     _default_model_path_and_volumes,
     _local_image_options,
+    _parse_sweep_axes_text,
     _short_model_name,
     _tested_summary,
 )
@@ -291,6 +293,96 @@ def test_build_screen_generate_applies_real_sweep_axis(tmp_path):
             assert len(sweep) == 1
             assert sweep[0].param == "params.shared.context_size"
             assert sweep[0].values == [2048, 4096]  # real ints, not strings
+
+    asyncio.run(scenario())
+
+
+def test_parse_sweep_axes_text_handles_multiple_lines():
+    text = "params.shared.context_size=2048,4096\nenv.GGML_SYCL_ENABLE_GRAPH=0,1\n"
+    axes = _parse_sweep_axes_text(text)
+    assert axes == [
+        {"param": "params.shared.context_size", "values": [2048, 4096]},
+        {"param": "env.GGML_SYCL_ENABLE_GRAPH", "values": [0, 1]},
+    ]
+
+
+def test_parse_sweep_axes_text_ignores_blank_lines():
+    assert _parse_sweep_axes_text("\n\n  \n") == []
+
+
+def test_parse_sweep_axes_text_rejects_malformed_line():
+    with pytest.raises(ValueError, match="line 1"):
+        _parse_sweep_axes_text("not-a-valid-line")
+
+
+def test_build_screen_add_sweep_axis_button_appends_line_and_clears_builder(tmp_path):
+    # Direct user request: sweeping needs "the ability to select several
+    # at a time" - clicking + axis should stack another line rather than
+    # overwrite/replace the previous one.
+    load_builtin_adapters()
+    gguf = tmp_path / "test-model.gguf"
+    gguf.write_bytes(b"x")
+    model = ModelInfo(path=str(gguf), format="gguf", compatible_engines=["qxmx"])
+
+    async def scenario():
+        app = LLAPDanceApp()
+        async with app.run_test() as pilot:
+            await app.push_screen(BuildScreen(model))
+            await pilot.pause()
+            screen = app.screen
+
+            screen.query_one("#sweep-param", Select).value = "params.shared.context_size"
+            screen.query_one("#sweep-values", Input).value = "2048,4096"
+            screen.action_add_sweep_axis()
+            await pilot.pause()
+
+            assert screen.query_one("#sweep-values", Input).value == ""  # builder row cleared
+            assert screen.query_one("#sweep-param", Select).value == Select.NULL
+
+            screen.query_one("#sweep-param", Select).value = "params.shared.parallel_slots"
+            screen.query_one("#sweep-values", Input).value = "1,2"
+            screen.action_add_sweep_axis()
+            await pilot.pause()
+
+            axes_text = screen.query_one("#sweep-axes", TextArea).text
+            assert "params.shared.context_size=2048,4096" in axes_text
+            assert "params.shared.parallel_slots=1,2" in axes_text
+
+    asyncio.run(scenario())
+
+
+def test_build_screen_generate_applies_multiple_sweep_axes(tmp_path):
+    load_builtin_adapters()
+    gguf = tmp_path / "test-model.gguf"
+    gguf.write_bytes(b"x")
+    model = ModelInfo(path=str(gguf), format="gguf", compatible_engines=["qxmx"])
+
+    async def scenario():
+        app = LLAPDanceApp()
+        async with app.run_test() as pilot:
+            await app.push_screen(BuildScreen(model))
+            await pilot.pause()
+            screen = app.screen
+
+            screen.query_one("#image", Input).value = "qxmx:latest"
+            screen.query_one("#sweep-axes", TextArea).text = "params.shared.context_size=2048,4096\n"
+            # plus one more axis still sitting in the unclicked builder row
+            screen.query_one("#sweep-param", Select).value = "params.shared.parallel_slots"
+            screen.query_one("#sweep-values", Input).value = "1,2"
+            screen.action_generate()
+            await pilot.pause()
+
+            raw = screen.query_one("#yaml-preview", TextArea).text
+            suite = TestSuite.model_validate(yaml.safe_load(raw))
+            sweep = suite.backends[0].sweep
+            assert len(sweep) == 2
+            assert sweep[0].param == "params.shared.context_size"
+            assert sweep[0].values == [2048, 4096]
+            assert sweep[1].param == "params.shared.parallel_slots"
+            assert sweep[1].values == [1, 2]
+
+            status = str(screen.query_one("#build-status", Static).render())
+            assert "4 runs" in status  # 2 * 2 combinations
 
     asyncio.run(scenario())
 
