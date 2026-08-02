@@ -65,9 +65,11 @@ def describe_engine_cmd(engine_name: str) -> None:
     engine/library env flags the translator never touches (swept directly
     via env.<NAME> - same mechanism, different config section)."""
     catalog = describe_engine(engine_name)
-    if not catalog["params"] and not catalog["env_flags"]:
+    if not catalog["params"] and not catalog["env_flags"] and not catalog["image_hints"]:
         click.echo(f"{engine_name}: nothing cataloged")
         return
+    if catalog["image_hints"]:
+        click.echo(f"image_hints (patterns of docker tags known to fit this engine): {', '.join(catalog['image_hints'])}")
     if catalog["params"]:
         click.echo("params (swept via params.shared / params.backend_specific):")
         for param, info in catalog["params"].items():

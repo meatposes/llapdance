@@ -93,4 +93,4 @@ def test_describe_engine_returns_empty_catalogs_for_engine_with_no_declarations(
             return EngineInvocation()
 
     register("engine", NoDeclarationsEngine.name, NoDeclarationsEngine)
-    assert describe_engine("no-declarations-engine") == {"params": {}, "env_flags": {}}
+    assert describe_engine("no-declarations-engine") == {"params": {}, "env_flags": {}, "image_hints": []}

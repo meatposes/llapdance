@@ -79,6 +79,9 @@ from llapdance.plugins.registry import register
 class OpenArcEngine(EngineTranslator):
     name = "openarc"
 
+    # Real tag validated against (VALIDATION.md): the local openarc:dev image.
+    image_hints = ["openarc:*"]
+
     sweepable_params = {
         "model_type": {"type": "str", "default": "llm", "values": ["llm", "vlm", "whisper", "qwen3_asr", "kokoro", "emb", "rerank"], "maps_to": "/openarc/load model_type"},
         "openarc_engine": {"type": "str", "default": "ovgenai", "values": ["ovgenai", "openvino", "optimum"], "maps_to": "/openarc/load engine", "note": "not all model_type/engine combinations are valid, see module docstring"},

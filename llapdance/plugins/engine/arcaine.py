@@ -41,6 +41,11 @@ from llapdance.plugins.registry import register
 class ArcaineEngine(EngineTranslator):
     name = "arcaine"
 
+    # Real tags validated against (VALIDATION.md): arcaine-server:latest,
+    # the qwen3_5-KV-cache-fix rebuild arcaine-server:qwen35fix, and the
+    # dev base image arcaine:onednn313 it was rebuilt from.
+    image_hints = ["arcaine-server:*", "arcaine:*"]
+
     sweepable_params = {
         "context_size": {"type": "int", "default": 4096, "maps_to": "MAX_SEQ env"},
         "max_tokens": {"type": "int", "default": 2048, "maps_to": "DEFAULT_MAX_TOKENS env"},

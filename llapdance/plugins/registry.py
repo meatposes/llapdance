@@ -65,7 +65,11 @@ def describe_engine(name: str) -> dict:
     config). Both are class attributes, read without instantiating the
     translator."""
     engine = get("engine", name)
-    return {"params": dict(engine.sweepable_params), "env_flags": dict(engine.known_env_flags)}
+    return {
+        "params": dict(engine.sweepable_params),
+        "env_flags": dict(engine.known_env_flags),
+        "image_hints": list(engine.image_hints),
+    }
 
 
 def load_builtin_adapters() -> None:

@@ -52,6 +52,13 @@ _REASONING_VALUES = {"on", "off", "auto"}
 class LlamaCppSyclEngine(EngineTranslator):
     name = "llama-cpp-sycl"
 
+    # Real tag this engine was validated against (VALIDATION.md) - the
+    # production `llama-cpp-bonsai:meat6-hardened` container. Deliberately
+    # NOT `llama-cpp-sycl:*` or `llama-cpp-intel:*` (also seen locally via
+    # `docker images`) - neither has been confirmed to speak this
+    # translator's actual CLI/env contract, unlike bonsai.
+    image_hints = ["llama-cpp-bonsai:*"]
+
     sweepable_params = {
         "context_size": {"type": "int", "default": 4096, "maps_to": "-c"},
         "batch_size": {"type": "int", "maps_to": "-b / -ub (same value both)"},

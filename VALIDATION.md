@@ -624,6 +624,26 @@ Fixed with `DataTable { height: 12; }` in `LLAPDanceApp.CSS` (`app.py`) - the ta
 
 New regression test `test_configure_button_visible_at_a_normal_terminal_size` pins this at `size=(100, 30)` so it can't regress silently again. 138 passing total.
 
+## Twenty-fifth session — engine-declared `image_hints`, real gap closed
+
+Direct question after the arcaine/qxmx image-picker fix: does anything stop an architecturally-incompatible image (e.g. an OpenVINO/OpenArc image) from being wired into an engine that can't run it? Answer at the time: no - the picker's fix that session was a crude substring match on the engine's own name, and nothing on `EngineTranslator` itself declared which images it actually fits. Confirmed via grep: zero hits for any "image_pattern"/"compatible_image" concept anywhere in the codebase before this session.
+
+Added `EngineTranslator.image_hints: list[str]` (`llapdance/plugins/base.py`) - fnmatch glob patterns of docker tags each engine has actually been validated/run against, same spirit and same class-attribute pattern as `sweepable_params`/`known_env_flags` (introspectable without instantiating, surfaced via `describe_engine()` and now `llapdance describe-engine`). Populated for all 5 reference engines from real evidence, not guessed:
+
+- `qxmx`: `["qxmx:*", "llapdance/qxmx-from-source:*"]`
+- `llama-cpp-sycl`: `["llama-cpp-bonsai:*"]` - real production tag from `llama_cpp_sycl.py`'s own docstring
+- `arcaine`: `["arcaine-server:*", "arcaine:*"]`
+- `openarc`: `["openarc:*"]`
+- `vllm`: `["intel/vllm:*", "intel/llm-scaler-vllm*", "urakozz/vllm-xpu-env*"]`
+
+Wired into `_local_image_options()` (`llapdance/tui/screens.py`): when an engine declares hints, filters local images via `fnmatch` against them instead of the crude substring-on-engine-name match; falls back to the old substring behavior only for an engine with no hints declared (so nothing regresses to showing zero images).
+
+**Real gap the old substring approach had, confirmed live**: `llama-cpp-sycl`'s actual validated image is tagged `llama-cpp-bonsai:meat6-hardened` - the string `"llama-cpp-sycl"` never appears in it at all, so the previous fix (substring match on the engine's own name) would have shown ZERO images for this engine despite one existing locally. Confirmed via a real call: `_local_image_options("llama-cpp-sycl")` now correctly returns `['llama-cpp-bonsai:meat6-hardened']`; every other engine's real local images (qxmx: 8 tags, arcaine: 24 tags, openarc: 3 tags, vllm: 4 tags) filter correctly with no cross-engine leakage.
+
+This is still a hint, not an enforced guarantee (documented on the attribute itself) - a tag matching a pattern could still be stale or the wrong build. It closes the "shows nothing" and "shows an unrelated engine's image" failure modes, not "silently loads the wrong architecture inside an image with a matching tag."
+
+2 new/updated tests (`describe_engine`'s empty-catalog shape now includes `image_hints: []`), 140 passing total.
+
 ## Updated adapter status (see README.md, now reflects reality instead of aspiration)
 
 | Adapter | Status |

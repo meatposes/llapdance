@@ -147,6 +147,12 @@ Direct follow-up to SPEC_REVIEW.md's top recommendation:
 
 Direct feedback: TUI model tables buried the full absolute host path, and the Configure button needed a huge screen to even see. Fixed: model tables now lead with a short relative name (`_short_model_name`, last 2 path segments) and never show the full path; found and fixed the real cause of the huge-screen requirement — `DataTable` defaulted to filling all remaining vertical space, pushing buttons off-screen at normal terminal sizes (confirmed at 100x30) — capped via `DataTable { height: 12; }`. Also shortened labels/removed redundant instructional text across all four screens. 138 passing.
 
+## Twenty-fifth session addendum
+
+Direct question: is there any mechanism stopping an architecturally-incompatible image (e.g. OpenVINO/OpenArc) from being wired into an engine that can't run it? Answer was no. Added `EngineTranslator.image_hints` (real, evidence-based glob patterns of validated docker tags per engine - qxmx, llama-cpp-sycl, arcaine, openarc, vllm all populated), surfaced via `describe_engine()`/`llapdance describe-engine`, wired into the TUI's image picker filter (`_local_image_options`). Found along the way: the previous substring-only filter would have shown ZERO images for llama-cpp-sycl (its real tag `llama-cpp-bonsai:meat6-hardened` doesn't contain "llama-cpp-sycl" anywhere) - now fixed. Still a hint, not an enforced guarantee. 140 passing.
+
+Still open, not done this session: mmproj-*.gguf companion/projector files get scanned as standalone models in the TUI/CLI model catalog - cosmetic/confusion issue, not yet fixed.
+
 ## Recommended next session
 
 Per the (now mostly-addressed) spec review, remaining real gaps in priority order:
