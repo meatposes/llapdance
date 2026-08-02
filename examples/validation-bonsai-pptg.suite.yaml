@@ -1,0 +1,45 @@
+# Real PP/TG validation session: hits the already-running production
+# llama-cpp-bonsai container directly (source.mode: external, read-only,
+# lifecycle never touched - same practice as validation-external.suite.yaml).
+#
+# GOTCHA found live: llama.cpp's prompt caching is on by default - a short
+# prompt gets mostly served from cache on repeat requests (confirmed:
+# only 4 of 22 prompt tokens freshly processed on one such request),
+# reporting a tiny, batch-starved "prompt_per_second" nothing like a real
+# prefill measurement. request_extra disables it
+# ({"cache_prompt": false}); the prompt itself is a long, non-repeating
+# synthetic string (~7400 real tokens once tokenized) so PP reflects a
+# genuine large-batch prefill, comparable to llama-benchy's own
+# prompt_size: 2048 run on this same backend/model (see VALIDATION.md).
+name: validation-bonsai-pptg
+
+backends:
+  - name: bonsai-pptg
+    source:
+      mode: external
+      endpoint: "http://172.28.0.1:8001"
+    model: "Ternary-Bonsai-27B-Q2_0.gguf"
+    device_note: "already-running production llama-cpp-bonsai container, read-only, lifecycle never touched"
+
+benchmark_adapters:
+  - adapter: generic-http
+    config:
+      model: "Ternary-Bonsai-27B-Q2_0.gguf"
+      max_tokens: 32
+      num_requests: 1
+      request_extra:
+        cache_prompt: false
+      # generated at run time by scripts/gen_pptg_prompt.py-equivalent -
+      # see the CLI --set override used to run this suite; kept short here
+      # since a real ~7400-token prompt isn't practical to hand-author in
+      # YAML
+      prompt: "In one sentence, what is a hash table?"
+
+coherence_adapters:
+  - adapter: fixed-questions
+    config:
+      model: "Ternary-Bonsai-27B-Q2_0.gguf"
+
+storage:
+  flat_file_dir: "./results"
+  extra_adapters: []

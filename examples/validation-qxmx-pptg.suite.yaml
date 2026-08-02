@@ -1,0 +1,54 @@
+# Re-run of validation-qxmx.suite.yaml, updated for two things:
+# 1. Model moved from /mnt/ignite/LLM/huggingface/gguf to
+#    /mnt/ignite/LLM/models/gguf this session (so the TUI's default scan
+#    dir picks it up) - volumes path updated to match.
+# 2. Real PP/TG validation session: qxmx has no server-side timings
+#    object (confirmed via its own source), so generic-http derives PP/TG
+#    from usage.prompt_tokens/completion_tokens + TTFT - this run exists
+#    to populate a real stored PP/TG record for qxmx specifically.
+name: validation-qxmx-pptg
+
+backends:
+  - name: qxmx-pptg
+    source:
+      mode: prebuilt
+      image: "qxmx:latest"
+    model: "Ternary-Bonsai-27B-Q2_0"
+    model_path: "/models/Ternary-Bonsai-27B-Q2_0.gguf"
+    engine: "qxmx"
+    port: 8080
+    volumes:
+      /mnt/ignite/LLM/models/gguf/Ternary-Bonsai-27B-gguf: /models
+    params:
+      shared:
+        context_size: 4096
+        kv_cache_quant: "q8_0"
+    health_path: "/health"
+    startup_timeout_s: 120
+    network:
+      mode: disabled
+
+device_target:
+  mode: indices
+  indices: [3]
+
+execution_target:
+  mode: local
+
+benchmark_adapters:
+  - adapter: generic-http
+    config:
+      prompt: "In one sentence, what is a hash table?"
+      max_tokens: 64
+      num_requests: 3
+
+coherence_adapters:
+  - adapter: fixed-questions
+    config: {}
+
+storage:
+  flat_file_dir: "./results"
+  extra_adapters: []
+
+min_free_vram_mb: 4096
+allow_unknown_vram: false

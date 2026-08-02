@@ -111,7 +111,19 @@ class FixedQuestionCoherence(CoherenceAdapter):
             json={"model": model, "messages": [{"role": "user", "content": prompt}], "max_tokens": max_tokens},
         )
         resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"]
+        message = resp.json()["choices"][0]["message"]
+        # Real crash found live against vllm-urak's real Ornith-1.0-35B-int4-
+        # AutoRound: `content` came back null, the entire answer sitting in a
+        # `reasoning` field instead ({"content": null, "reasoning": "...42"},
+        # finish_reason "length" - the whole token budget went into the
+        # thinking trace, same failure MODE as the already-documented
+        # llama-cpp-sycl LLAMA_ARG_REASONING gotcha, just a different field
+        # name for this model/server). `.lower()` on a None crashed this
+        # adapter outright rather than reporting a real coherence failure.
+        # Falls back through every reasoning-field spelling seen so far
+        # before giving up with an empty string (a real, gradeable "no
+        # answer" failure, not a crash).
+        return message.get("content") or message.get("reasoning_content") or message.get("reasoning") or ""
 
 
 register("coherence", FixedQuestionCoherence.name, FixedQuestionCoherence)
