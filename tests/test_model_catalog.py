@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from llapdance.core.model_catalog import annotate_tested_status, load_run_history, scan_models
 from llapdance.core.result import CoherenceResult, RunResult
@@ -13,8 +14,32 @@ def test_detects_standalone_gguf_file_and_quant_hint(tmp_path):
     assert len(models) == 1
     assert models[0].format == "gguf"
     assert models[0].quant_hint == "Q2_0"
-    assert models[0].compatible_engines == ["llama-cpp-sycl", "qxmx"]
+    assert models[0].compatible_engines == ["llama-cpp-sycl", "llama-cpp-vulkan", "qxmx"]
     assert models[0].size_bytes == 100
+    assert models[0].has_mmproj is False
+
+
+def test_mmproj_files_hidden_but_flagged_on_sibling_models(tmp_path):
+    # Direct user feedback: mmproj (multimodal projector) companion files
+    # were showing up as their own standalone "models" - real clutter,
+    # since running one alone as the main model is never meaningful. Hide
+    # them from scan results entirely, but surface the fact that one
+    # exists via has_mmproj on the real sibling model(s) in the same dir.
+    model_dir = tmp_path / "Ternary-Bonsai-27B-gguf"
+    model_dir.mkdir()
+    (model_dir / "Ternary-Bonsai-27B-Q2_0.gguf").write_bytes(b"x" * 100)
+    (model_dir / "Ternary-Bonsai-27B-mmproj-Q8_0.gguf").write_bytes(b"x" * 10)
+
+    other_dir = tmp_path / "no-mmproj-here"
+    other_dir.mkdir()
+    (other_dir / "some-model.gguf").write_bytes(b"x" * 100)
+
+    models = scan_models([str(tmp_path)])
+    paths = {Path(m.path).name: m for m in models}
+
+    assert "Ternary-Bonsai-27B-mmproj-Q8_0.gguf" not in paths  # hidden entirely
+    assert paths["Ternary-Bonsai-27B-Q2_0.gguf"].has_mmproj is True
+    assert paths["some-model.gguf"].has_mmproj is False
 
 
 def test_detects_openvino_ir_model_and_reads_dtype(tmp_path):

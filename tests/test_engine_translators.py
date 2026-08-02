@@ -3,6 +3,7 @@ import pytest
 from llapdance.core.probe import DeviceInfo
 from llapdance.plugins.engine.arcaine import ArcaineEngine
 from llapdance.plugins.engine.llama_cpp_sycl import LlamaCppSyclEngine
+from llapdance.plugins.engine.llama_cpp_vulkan import LlamaCppVulkanEngine
 from llapdance.plugins.engine.openarc import OpenArcEngine
 from llapdance.plugins.engine.qxmx import QxmxEngine
 from llapdance.plugins.engine.vllm import VLLMEngine
@@ -59,6 +60,41 @@ class TestLlamaCppSycl:
     def test_device_without_render_node_raises(self):
         with pytest.raises(ValueError, match="render_node"):
             LlamaCppSyclEngine().build(model_path="/m.gguf", params={}, port=8080, device=DEVICE_NO_RENDER_NODE)
+
+
+class TestLlamaCppVulkan:
+    # Direct user question surfaced this gap: llama-cpp-vulkan images
+    # (built from a real, different GGML backend - libggml-vulkan.so, not
+    # libggml-sycl.so, confirmed via a real `docker run ... ls /app`) had
+    # no EngineTranslator at all. Same llama.cpp server CLI as SYCL
+    # (backend-agnostic part of llama.cpp itself), so build() logic
+    # mirrors LlamaCppSyclEngine's - see llama_cpp_vulkan.py's docstring.
+    def test_minimal_params_matches_sycl_translators_shape(self):
+        inv = LlamaCppVulkanEngine().build(model_path="/models/x.gguf", params={}, port=8080, device=DEVICE)
+        assert inv.command == ["-m", "/models/x.gguf", "-c", "4096", "--port", "8080", "-ngl", "99"]
+        assert inv.env == {"LLAMA_ARG_HOST": "0.0.0.0"}
+        assert inv.devices == ["/dev/dri/renderD131:/dev/dri/renderD131"]
+
+    def test_f8_kv_quant_rejected(self):
+        with pytest.raises(ValueError, match="fp8"):
+            LlamaCppVulkanEngine().build(model_path="/m.gguf", params={"kv_cache_quant": "f8"}, port=8080, device=DEVICE)
+
+    def test_no_device_means_cpu_only(self):
+        inv = LlamaCppVulkanEngine().build(model_path="/m.gguf", params={}, port=8080, device=None)
+        assert inv.devices == []
+        assert "-ngl" in inv.command and inv.command[inv.command.index("-ngl") + 1] == "0"
+
+    def test_device_without_render_node_raises(self):
+        with pytest.raises(ValueError, match="render_node"):
+            LlamaCppVulkanEngine().build(model_path="/m.gguf", params={}, port=8080, device=DEVICE_NO_RENDER_NODE)
+
+    def test_image_hints_exclude_the_broken_entrypoint_tag(self):
+        # llama-cpp-vulkan:newmeat2's real ENTRYPOINT is /app/tools.sh, not
+        # /app/llama-server (confirmed via docker inspect) - this harness's
+        # local_docker execution has no per-backend entrypoint override, so
+        # that tag would silently run the wrong thing. Only the prism*
+        # tags (confirmed real ENTRYPOINT ["/app/llama-server"]) belong here.
+        assert LlamaCppVulkanEngine.image_hints == ["llama-cpp-vulkan:prism*"]
 
 
 class TestQxmx:

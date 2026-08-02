@@ -52,12 +52,17 @@ _REASONING_VALUES = {"on", "off", "auto"}
 class LlamaCppSyclEngine(EngineTranslator):
     name = "llama-cpp-sycl"
 
-    # Real tag this engine was validated against (VALIDATION.md) - the
-    # production `llama-cpp-bonsai:meat6-hardened` container. Deliberately
-    # NOT `llama-cpp-sycl:*` or `llama-cpp-intel:*` (also seen locally via
-    # `docker images`) - neither has been confirmed to speak this
-    # translator's actual CLI/env contract, unlike bonsai.
-    image_hints = ["llama-cpp-bonsai:*"]
+    # Real tags confirmed to be this same SYCL backend build (direct user
+    # question: are llama-cpp-sycl/llama-cpp-intel/llama-cpp-bonsai
+    # secretly different things? Checked for real, not assumed - `docker
+    # run --entrypoint sh <image> -c "ls /app | grep ggml"` against all
+    # three shows `libggml-sycl.so` present in every one of them, and
+    # identical baked-in oneAPI env (CCL_CONFIGURATION, ONEAPI_ROOT, etc.)
+    # via `docker inspect`. Same backend, just different build tags/dates -
+    # `llama-cpp-vulkan:*` is the genuinely different one, see
+    # llama_cpp_vulkan.py: it links libggml-vulkan.so instead, no oneAPI
+    # env at all, needs its own translator).
+    image_hints = ["llama-cpp-bonsai:*", "llama-cpp-sycl:*", "llama-cpp-intel:*"]
 
     sweepable_params = {
         "context_size": {"type": "int", "default": 4096, "maps_to": "-c"},
