@@ -64,8 +64,31 @@ class LlamaBenchyBenchmark(BenchmarkAdapter):
             )
         model = cfg.get("model", "default")
 
+        # Real bug found live running an actual overnight sweep: for a
+        # local-docker backend, `endpoint` is always `http://127.0.0.1:
+        # <published-port>` (see local_docker.py's start()) - correct for
+        # every OTHER benchmark adapter here, which runs in-process on the
+        # host, where 127.0.0.1 genuinely means "this host". This adapter
+        # is the one exception (see module docstring): it hands `base_url`
+        # to a SEPARATE llama-benchy-web CONTAINER, which then makes its
+        # OWN outbound requests - 127.0.0.1 inside that container means
+        # itself, not the host, so every request silently failed to
+        # connect. llama-benchy's own per-request error handling doesn't
+        # surface that as a top-level error - it just records null for
+        # every measurement, which is why this went unnoticed until the
+        # aggregated metrics turned out to be all zero. `model_host_override`
+        # lets a suite author supply whatever address IS reachable from the
+        # llama-benchy-web container in their own deployment (e.g. a docker
+        # bridge gateway IP) - deliberately not auto-guessed, since the
+        # right address depends on which docker network llama-benchy-web
+        # itself is on, which this adapter has no way to know.
+        base_url = endpoint.rstrip("/")
+        model_host_override = cfg.get("model_host_override")
+        if model_host_override:
+            base_url = str(httpx.URL(base_url).copy_with(host=model_host_override))
+
         start_payload: dict[str, Any] = {
-            "base_url": endpoint.rstrip("/"),
+            "base_url": base_url,
             "model": model,
             "tokenizer": cfg.get("tokenizer", model),
             "test_group": cfg.get("test_group", "quick_check"),

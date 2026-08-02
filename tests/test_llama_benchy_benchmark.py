@@ -81,3 +81,51 @@ def test_start_payload_passes_endpoint_as_base_url(monkeypatch):
     assert seen["payload"]["base_url"] == "http://127.0.0.1:8001"
     assert seen["payload"]["model"] == "my-model"
     assert seen["payload"]["test_group"] == "baseline"
+
+
+def test_model_host_override_rewrites_unreachable_127_0_0_1(monkeypatch):
+    # Real bug found running an actual overnight sweep: for a local-docker
+    # backend, `endpoint` is always http://127.0.0.1:<port> (see
+    # local_docker.py's start()) - correct for every OTHER benchmark
+    # adapter, which runs in-process on the host. This adapter hands
+    # base_url to a SEPARATE llama-benchy-web container, where 127.0.0.1
+    # means itself, not the host - every request silently failed to
+    # connect, and llama-benchy's own per-request error handling recorded
+    # null for every measurement rather than raising. Confirmed live
+    # against a real container: swapping in the real docker bridge gateway
+    # (172.28.0.1 in this deployment) fixed it end to end.
+    seen = {}
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/start":
+            seen["payload"] = json.loads(request.content)
+            return httpx.Response(200, json={"run_id": "abc123"})
+        if request.url.path == "/api/run/abc123/stream":
+            return httpx.Response(200, content="data: {\"done\": true}\n\n", headers={"content-type": "text/event-stream"})
+        if request.url.path == "/api/results/abc123/export/json":
+            return httpx.Response(200, json=RESULT_DATA)
+        raise AssertionError(request.url)
+
+    _patch_client(monkeypatch, handle)
+    adapter = LlamaBenchyBenchmark({"dashboard_url": "http://localhost:5059"})
+    adapter.run("http://127.0.0.1:54321", {"model": "my-model", "model_host_override": "172.28.0.1"})
+    assert seen["payload"]["base_url"] == "http://172.28.0.1:54321"
+
+
+def test_no_override_leaves_endpoint_unchanged(monkeypatch):
+    seen = {}
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/start":
+            seen["payload"] = json.loads(request.content)
+            return httpx.Response(200, json={"run_id": "abc123"})
+        if request.url.path == "/api/run/abc123/stream":
+            return httpx.Response(200, content="data: {\"done\": true}\n\n", headers={"content-type": "text/event-stream"})
+        if request.url.path == "/api/results/abc123/export/json":
+            return httpx.Response(200, json=RESULT_DATA)
+        raise AssertionError(request.url)
+
+    _patch_client(monkeypatch, handle)
+    adapter = LlamaBenchyBenchmark({"dashboard_url": "http://localhost:5059"})
+    adapter.run("http://127.0.0.1:54321", {"model": "my-model"})
+    assert seen["payload"]["base_url"] == "http://127.0.0.1:54321"

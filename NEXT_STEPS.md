@@ -193,6 +193,10 @@ Confirmed sweep mechanism is a real cartesian product (verified live: 3 binary a
 
 Open item: residual PP gap between our ttft_split derivation and llama-benchy, partially explained. Confirmed Ternary-Bonsai-27B really is Qwen3.5/3.6-architecture (GGUF's own general.architecture=qwen35, tokenizer.ggml.pre=qwen35, chat_template is genuine Qwen3-style) via a hand-rolled GGUF metadata reader (installed gguf package and local llama.cpp's gguf-py both choked on this model's quant/tensor format). Found the real tokenizer already on disk (unsloth/Qwen3.6-27B-NVFP4) and verified it matches qxmx's own token count almost exactly (2029 vs 2042, gap = chat-template overhead). Real upstream repo (Qwen/Qwen3.6-27B) found in that model's own README front-matter. Supplying the correct tokenizer to llama-benchy moved PP from 737->841 tok/s (real, but partial improvement) - our own reading stayed ~2200 tok/s, still ~2.6x off. Real candidate explanation found but not confirmed: this GGUF has genuine SSM/Mamba fields (qwen35.ssm.*) - a hybrid attention/SSM architecture may not have a clean prefill/decode boundary the way a plain transformer does, which could explain why two different measurement methodologies disagree. Left open, not concluded.
 
+## Thirty-third session addendum
+
+Launched a real 76-combo overnight sweep (llama-cpp-intel:meaton x Qwen3.6-27B-Uncensored-HauhauCS-Balanced, GPU3, git 11924d4c, runs=1, ~15h). Found and fixed a real bug live: llama-benchy silently returned all-null results for every combo (including baseline) because local_docker's 127.0.0.1 endpoint is unreachable from the separate llama-benchy-web container (only on ai-network) - it needs a real host-reachable address. Added model_host_override config to llama_benchy.py's adapter (deliberately not auto-guessed, deployment-specific). Verified fix live twice, numbers now match the earlier calibration almost exactly. 178 passing. Sweep running for real as of this write-up - PP/TG line graphs to follow once complete.
+
 ## Recommended next session
 
 Per the (now mostly-addressed) spec review, remaining real gaps in priority order:
