@@ -7,7 +7,7 @@ from textual.widgets import DataTable, Input, Select, Static, TextArea
 
 from llapdance.config.models import TestSuite
 from llapdance.core.model_catalog import ModelInfo
-from llapdance.plugins.registry import load_builtin_adapters
+from llapdance.plugins.registry import available, describe_engine, load_builtin_adapters
 from llapdance.tui.app import LLAPDanceApp
 from llapdance.tui.screens import (
     BackendBrowserScreen,
@@ -329,10 +329,27 @@ def test_default_sweep_values_is_0_1_for_every_boolean_shape():
     # direct user complaint: shouldn't have to guess TRUE/FALSE vs ON/OFF -
     # every real engine in this codebase parses a plain "0"/"1" correctly
     # (checked each translator's own atoi/getenv/truthy-check parsing)
-    assert _default_sweep_values({"type": "presence"}) == "0,1"
     assert _default_sweep_values({"type": "bool", "default": True}) == "0,1"
     assert _default_sweep_values({"type": "int (0/1)", "default": 1}) == "0,1"
     assert _default_sweep_values({"type": "bool (atoi != 0)"}) == "0,1"
+    # explicit "value '0' disables" (qxmx's QXMX_FD/FOLD/VEC) is a real,
+    # distinct 0-vs-1 behavior, confirmed via qxmx's own source
+    assert _default_sweep_values({"type": "presence (value '0' disables)"}) == "0,1"
+
+
+def test_default_sweep_values_empty_for_bare_presence_flags():
+    # Real bug found auditing this after a live report: a bare/generic
+    # "presence" flag (ggml-sycl's GGML_SYCL_NO_PINNED, every GGML_VK_*
+    # flag in ggml-vulkan) triggers on ANY set value INCLUDING "0" -
+    # confirmed via their real `getenv(...) != nullptr` call sites, no
+    # atoi/strcmp involved. Suggesting "0,1" for one of these would
+    # silently produce two runs with IDENTICAL real behavior (both "flag
+    # present"), not an actual A/B - worse than no suggestion, since it
+    # looks like a valid sweep. There is no way to express "leave this
+    # env var unset" as one value of a sweep axis, so no default pair can
+    # honestly represent that comparison.
+    assert _default_sweep_values({"type": "presence"}) == ""
+    assert _default_sweep_values({"type": "presence (any non-empty value disables pinned host memory)"}) == ""
 
 
 def test_default_sweep_values_brackets_a_numeric_default():
@@ -348,6 +365,24 @@ def test_default_sweep_values_steps_up_instead_of_duplicating_a_small_default():
 def test_default_sweep_values_empty_when_nothing_to_go_on():
     # no default, no values - no suggestion, never a fabricated one
     assert _default_sweep_values({"type": "str", "maps_to": "LAYER_PLACEMENT env"}) == ""
+
+
+def test_default_sweep_values_never_suggests_env_string_for_a_bare_presence_flag_across_every_real_engine():
+    # Real regression guard for the bare-presence bug: walks every actual
+    # registered engine's real catalog (not a hand-picked sample) and
+    # confirms any entry whose type is a bare "presence" (no explicit
+    # "'0' disables" note) gets no suggestion at all - so this class of
+    # bug (a degenerate "0,1" sweep that's actually the same value twice
+    # in real behavior) can't silently come back for a newly added flag.
+    load_builtin_adapters()
+    for engine in available("engine"):
+        info = describe_engine(engine)
+        for name, entry in {**info["params"], **info["env_flags"]}.items():
+            type_str = str(entry.get("type", ""))
+            if type_str.strip() == "presence" or (
+                "presence" in type_str and "'0' disables" not in type_str and "atoi" not in type_str
+            ):
+                assert _default_sweep_values(entry) == "", f"{engine}.{name}: {entry}"
 
 
 def test_build_screen_sweep_values_prefills_a_real_default_on_selection(tmp_path):
