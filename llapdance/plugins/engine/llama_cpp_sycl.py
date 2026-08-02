@@ -68,7 +68,11 @@ class LlamaCppSyclEngine(EngineTranslator):
         "context_size": {"type": "int", "default": 4096, "maps_to": "-c"},
         "batch_size": {"type": "int", "maps_to": "-b / -ub (same value both)"},
         "kv_cache_quant": {"type": "str", "values": ["f16", "q8_0"], "maps_to": "--cache-type-k / --cache-type-v"},
-        "parallel_slots": {"type": "int", "maps_to": "--parallel"},
+        # "default": 4 here is llama.cpp's own real "auto" behavior when
+        # unset (confirmed in the validated run - see module docstring),
+        # not this translator's own default - --parallel is omitted
+        # entirely unless a suite sets this explicitly.
+        "parallel_slots": {"type": "int", "default": 4, "maps_to": "--parallel"},
         "reasoning": {"type": "str", "values": ["on", "off", "auto"], "default": "auto", "maps_to": "LLAMA_ARG_REASONING env"},
     }
 

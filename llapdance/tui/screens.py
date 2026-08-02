@@ -98,6 +98,47 @@ def _parse_sweep_axes_text(text: str) -> list[dict[str, Any]]:
     return axes
 
 
+def _default_sweep_values(info: dict[str, Any]) -> str:
+    """Direct user complaint: the sweep-values field never suggested
+    anything, so every sweep meant re-guessing correct on/off spelling
+    (TRUE? ON? 1?) and re-typing common numeric pairs from memory every
+    time. Derives a real starting pair from the same catalog metadata
+    already shown in the engine-info line (`describe_engine()`'s
+    `values`/`default`/`type`) - never invents a magnitude or unit that
+    isn't already in that entry; a param with no `default` and no
+    `values` gets no suggestion (still just the placeholder), rather than
+    a fabricated one.
+
+    On/off spelling: checked every engine's actual parsing this project
+    has (qxmx's `atoi`, ggml-sycl/vulkan's `getenv(...) != nullptr` or
+    `ggml_sycl_get_env` int parsing, vLLM's own truthy `params.get(...)`
+    checks in vllm.py's build()) - every single one treats a plain "0"/"1"
+    string correctly (falsy/truthy, or exact match for the "0 disables"
+    ones), so "0,1" is a real, uniform answer across this whole codebase,
+    not a per-engine guess."""
+    values = info.get("values")
+    if values:
+        return ",".join(str(v) for v in values)
+
+    type_str = str(info.get("type", "")).lower()
+    default = info.get("default")
+
+    if isinstance(default, bool) or "bool" in type_str or "presence" in type_str or "0/1" in type_str:
+        return "0,1"
+
+    if isinstance(default, (int, float)) and not isinstance(default, bool):
+        if isinstance(default, int) and default < 2:
+            # halving would duplicate a small default (e.g. qxmx's
+            # parallel_slots default of 1 -> "1,1", not a real second
+            # point) - step up by one instead, still two genuinely
+            # distinct values either side of the default.
+            return f"{default},{default + 1}"
+        low = default // 2 if isinstance(default, int) else default
+        return f"{low},{default}"
+
+    return ""
+
+
 def _short_model_name(path: str) -> str:
     """Real complaint fixed: the model table showed the FULL absolute host
     path (e.g. `/mnt/ignite/LLM/models/AEON-7/Ornith-1.0-...`), both as a
@@ -400,6 +441,7 @@ class BuildScreen(Screen):
         super().__init__()
         self._model = model
         self._preselected_engine = preselected_engine
+        self._sweep_param_info: dict[str, dict[str, Any]] = {}
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -461,6 +503,8 @@ class BuildScreen(Screen):
         info = describe_engine(engine)
         options = [(f"params.shared.{k}", f"params.shared.{k}") for k in info["params"]]
         options += [(f"env.{k}", f"env.{k}") for k in info["env_flags"]]
+        self._sweep_param_info = {f"params.shared.{k}": v for k, v in info["params"].items()}
+        self._sweep_param_info.update({f"env.{k}": v for k, v in info["env_flags"].items()})
         sweep_select = self.query_one("#sweep-param", Select)
         sweep_select.set_options(options)
 
@@ -500,6 +544,25 @@ class BuildScreen(Screen):
         elif event.select.id == "engine":
             self._refresh_sweep_options()
             self._refresh_image_options()
+        elif event.select.id == "sweep-param" and event.value != Select.NULL:
+            # Direct user complaint: picking a param never suggested real
+            # values to sweep - always prefill a real default (from the
+            # same catalog metadata the engine-info line already shows),
+            # still just a plain Input the user can overwrite.
+            #
+            # Guard against a stale event: action_add_sweep_axis() sets
+            # sweep-param back to Select.NULL synchronously, without an
+            # intervening pilot.pause() in some callers, so a queued
+            # Changed message for the PREVIOUS selection can still be
+            # pending when that happens - only act if this event still
+            # matches the widget's current value.
+            sweep_param_select = self.query_one("#sweep-param", Select)
+            if event.value != sweep_param_select.value:
+                return
+            info = self._sweep_param_info.get(event.value, {})
+            default = _default_sweep_values(info)
+            if default:
+                self.query_one("#sweep-values", Input).value = default
 
     def _refresh_image_options(self) -> None:
         engine = self.query_one("#engine", Select).value

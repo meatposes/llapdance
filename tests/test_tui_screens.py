@@ -17,6 +17,7 @@ from llapdance.tui.screens import (
     _coerce_sweep_value,
     _default_model_path_and_volumes,
     _local_image_options,
+    _default_sweep_values,
     _parse_sweep_axes_text,
     _short_model_name,
     _tested_summary,
@@ -313,6 +314,62 @@ def test_parse_sweep_axes_text_ignores_blank_lines():
 def test_parse_sweep_axes_text_rejects_malformed_line():
     with pytest.raises(ValueError, match="line 1"):
         _parse_sweep_axes_text("not-a-valid-line")
+
+
+def test_default_sweep_values_uses_enum_values_verbatim():
+    assert _default_sweep_values({"type": "str", "values": ["f16", "q8_0"]}) == "f16,q8_0"
+    assert _default_sweep_values({"type": "str", "values": ["on", "off", "auto"]}) == "on,off,auto"
+
+
+def test_default_sweep_values_is_0_1_for_every_boolean_shape():
+    # direct user complaint: shouldn't have to guess TRUE/FALSE vs ON/OFF -
+    # every real engine in this codebase parses a plain "0"/"1" correctly
+    # (checked each translator's own atoi/getenv/truthy-check parsing)
+    assert _default_sweep_values({"type": "presence"}) == "0,1"
+    assert _default_sweep_values({"type": "bool", "default": True}) == "0,1"
+    assert _default_sweep_values({"type": "int (0/1)", "default": 1}) == "0,1"
+    assert _default_sweep_values({"type": "bool (atoi != 0)"}) == "0,1"
+
+
+def test_default_sweep_values_brackets_a_numeric_default():
+    assert _default_sweep_values({"type": "int", "default": 4096}) == "2048,4096"
+    assert _default_sweep_values({"type": "int", "default": 8192}) == "4096,8192"
+
+
+def test_default_sweep_values_steps_up_instead_of_duplicating_a_small_default():
+    # halving a default of 1 would produce "1,1" - not a real second point
+    assert _default_sweep_values({"type": "int", "default": 1}) == "1,2"
+
+
+def test_default_sweep_values_empty_when_nothing_to_go_on():
+    # no default, no values - no suggestion, never a fabricated one
+    assert _default_sweep_values({"type": "str", "maps_to": "LAYER_PLACEMENT env"}) == ""
+
+
+def test_build_screen_sweep_values_prefills_a_real_default_on_selection(tmp_path):
+    load_builtin_adapters()
+    gguf = tmp_path / "test-model.gguf"
+    gguf.write_bytes(b"x")
+    model = ModelInfo(path=str(gguf), format="gguf", compatible_engines=["qxmx"])
+
+    async def scenario():
+        app = LLAPDanceApp()
+        async with app.run_test() as pilot:
+            await app.push_screen(BuildScreen(model))
+            await pilot.pause()
+            screen = app.screen
+
+            screen.query_one("#sweep-param", Select).value = "params.shared.context_size"
+            await pilot.pause()
+            assert screen.query_one("#sweep-values", Input).value == "2048,4096"
+
+            # switching to an enum param overwrites it with that param's
+            # own real values, not a leftover numeric guess
+            screen.query_one("#sweep-param", Select).value = "params.shared.kv_cache_quant"
+            await pilot.pause()
+            assert screen.query_one("#sweep-values", Input).value == "f16,q8_0,f8"
+
+    asyncio.run(scenario())
 
 
 def test_build_screen_add_sweep_axis_button_appends_line_and_clears_builder(tmp_path):

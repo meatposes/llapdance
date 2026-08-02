@@ -776,3 +776,22 @@ Fixed in `llapdance/plugins/coherence/fixed_questions.py`'s `_ask()`: falls back
 Regenerated with the fresh dataset: 39 real benchmark records (was 34), 5 with a real PP/TG split (was 1) - qxmx, OpenArc, vLLM, and llama.cpp-family now report real PP/TG; Arcaine confirmed genuinely blended-only, not an integration gap. Same URL, republished in place.
 
 162 passing total (2 new coherence tests on top of the prior session's 160).
+
+## Thirtieth session — sweep-value defaults, no more guessing on/off spelling
+
+Direct complaint: the sweep-values field never suggested anything - every sweep meant re-guessing on/off spelling (TRUE? ON? 1?) and re-typing common numeric pairs (2048,4096) from memory every time.
+
+Added `_default_sweep_values(info)` (`llapdance/tui/screens.py`) - derives a real starting pair from the exact same catalog metadata `describe_engine()` already surfaces (`values`/`default`/`type`), never inventing a magnitude that isn't already in that entry:
+
+- Enum-like params (`values` present, e.g. `kv_cache_quant`, `reasoning`, OpenArc's `model_type`) → all real values joined verbatim.
+- Anything boolean/binary-shaped (`type` containing "bool"/"presence"/"0/1", or a literal `bool` default) → `"0,1"`. Checked every engine's actual parsing before committing to this - qxmx's `atoi`, ggml-sycl/vulkan's `getenv(...) != nullptr`/`ggml_sycl_get_env` int parsing, vLLM's own truthy `params.get(...)` checks (`vllm.py`'s `build()`) - every one treats a plain `"0"`/`"1"` string correctly. One real, uniform answer across the whole codebase, not a per-engine guess - directly answers "should I use TRUE/FALSE or ON/OFF".
+- A numeric `default` with no `values` → bracketed around it (e.g. `context_size` default 4096 → `"2048,4096"`, the exact pair every sweep test this project has wanted anyway). Small-default edge case handled: halving a default of 1 (qxmx's `parallel_slots`) would produce `"1,1"` (not a real second point) - steps up to `"1,2"` instead.
+- Nothing declared (no `values`, no `default`) → empty, still just the placeholder - never a fabricated suggestion (e.g. Arcaine's `layer_placement`/`denoising_steps`/`seed`, none of which have a documented sensible default).
+
+Wired into `BuildScreen.on_select_changed`: picking a sweep param now prefills `#sweep-values` with its real default immediately; still a plain editable `Input`, exactly as requested ("the setting can still be a text field... that is fine"). Guarded against a real race found while testing this live: `action_add_sweep_axis()` clears `#sweep-param` back to blank without an intervening event-loop pause in some call sites, so a queued `Select.Changed` for the *previous* selection could still be pending when that happens and re-fill the just-cleared field - fixed by checking the event's value still matches the widget's *current* value before acting on it.
+
+Also added one legitimately-known missing default: `llama-cpp-sycl`/`llama-cpp-vulkan`'s `parallel_slots` had no `"default"` at all despite both translators' own module docstrings already documenting that llama.cpp's real "auto" behavior picks 4 - added `"default": 4` backed by that existing evidence, not new speculation.
+
+Verified live: `context_size` → `"2048,4096"`, `kv_cache_quant` → `"f16,q8_0"` (or `"f16,q8_0,f8"` for qxmx, correctly per-engine), `reasoning` → `"on,off,auto"`, `GGML_SYCL_ENABLE_GRAPH` → `"0,1"`, `GGML_SYCL_MKL_FA_Q_TILE` (default 8192) → `"4096,8192"`, `parallel_slots` (qxmx, default 1) → `"1,2"`. Re-confirmed at a real 100×30 terminal that every button (including `+ axis`) is still visible - no regression on the earlier DataTable-height fix.
+
+9 new tests (helper unit tests covering every branch, plus a live prefill-on-selection test), 168 passing total.
