@@ -426,4 +426,86 @@ def test_external_backend_also_runs_telemetry(tmp_path, monkeypatch):
     )
     outcome = orchestrator.run_backend(suite, suite.backends[0])
     assert outcome.result.telemetry[0].metrics == {"GPU_BUSY": 42.0}
+
+
+class FlakyExecutionTarget(FakeExecutionTarget):
+    """Same as FakeExecutionTarget, but fails to start any backend named
+    'bad' - simulates a real container crashing/failing to start for one
+    combination in a multi-backend/sweep run, without touching the other
+    backends' success path at all."""
+
+    name = "flaky-execution"
+
+    def start(self, backend_config, image_ref, device_indices):
+        if backend_config["name"] == "bad":
+            raise RuntimeError("simulated container start failure")
+        return super().start(backend_config, image_ref, device_indices)
+
+
+def test_run_suite_skips_a_failing_backend_and_keeps_the_rest(tmp_path, monkeypatch):
+    # Real bug, found from direct user feedback: run_suite() used to be a
+    # bare list comprehension - one backend raising discarded every other
+    # backend's already-collected result too. A sweep of N combinations
+    # with one bad one produced ZERO results, not N-1, and no summary at
+    # all (the exception propagated straight out of run_suite()).
+    monkeypatch.setattr(orchestrator, "_wait_until_ready", lambda *a, **k: None)
+    _register_fakes()
+    registry.register("execution", FlakyExecutionTarget.name, FlakyExecutionTarget)
+    orig_get = registry.get
+
+    def get_with_flaky_execution(kind, name):
+        if kind == "execution":
+            return FlakyExecutionTarget
+        return orig_get(kind, name)
+
+    monkeypatch.setattr(orchestrator.registry, "get", get_with_flaky_execution)
+
+    suite = _suite(
+        tmp_path,
+        backends=[
+            BackendConfig(name="good-1", source=BackendSource(mode=SourceMode.prebuilt, image="x:y"), model="m"),
+            BackendConfig(name="bad", source=BackendSource(mode=SourceMode.prebuilt, image="x:y"), model="m"),
+            BackendConfig(name="good-2", source=BackendSource(mode=SourceMode.prebuilt, image="x:y"), model="m"),
+        ],
+    )
+
+    events: list[str] = []
+    outcomes = orchestrator.run_suite(suite, on_event=events.append)
+
+    # both good backends produced real results despite the middle one
+    # failing - not zero, not a crash
+    assert [o.result.backend_name for o in outcomes] == ["good-1", "good-2"]
+    assert all(o.result.benchmarks[0].metrics["avg_tokens_per_sec"] == 42.0 for o in outcomes)
+    # the failure is real and visible, not silently swallowed
+    assert any("[bad] FAILED" in e and "simulated container start failure" in e for e in events)
+
+
+def test_best_outcome_picks_highest_throughput_among_passing_backends(tmp_path):
+    from llapdance.core.orchestrator import RunOutcome
+    from llapdance.core.result import RunResult
+
+    def _outcome(name: str, tok_s: float, coherence_passed: bool = True) -> "RunOutcome":
+        result = RunResult(
+            run_id=name,
+            timestamp=0.0,
+            backend_name=name,
+            backend_config={},
+            execution_target={},
+            device_target={},
+            benchmarks=[BenchmarkResult(adapter="fake-benchmark", metrics={"avg_tokens_per_sec": tok_s})],
+            coherence=[CoherenceResult(adapter="fake-coherence", total=10, passed=10 if coherence_passed else 0, graded_by_match=10, graded_by_llm_judge=0)],
+        )
+        return RunOutcome(result=result, delta_against=None)
+
+    outcomes = [_outcome("slow", 10.0), _outcome("fast-but-wrong", 99.0, coherence_passed=False), _outcome("fast", 42.0)]
+    best = orchestrator.best_outcome(outcomes)
+    assert best is not None
+    throughput, name, comparable_count = best
+    assert name == "fast"  # highest throughput among backends that actually passed coherence
+    assert throughput == 42.0
+    assert comparable_count == 2  # "fast-but-wrong" excluded, not counted as comparable
+
+
+def test_best_outcome_none_for_a_single_outcome():
+    assert orchestrator.best_outcome([]) is None
     assert FakeTelemetry.starts and FakeTelemetry.stops

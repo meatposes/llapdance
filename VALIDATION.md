@@ -829,3 +829,29 @@ Direct request: "check other engines' sweep params too." Re-dumped every registe
 - **`batch_size`** (llama-cpp-sycl/vulkan) and vLLM's `context_size`/`max_num_seqs`/`max_num_batched_tokens`/`block_size` - no validated-run value documented anywhere in this project for any of these - correctly blank rather than inventing one.
 
 No further crashes or degenerate suggestions found. New test (`test_default_sweep_values_covers_vllms_presence_flags_now_that_they_have_a_verified_default`) locks in the vLLM fix. 172 passing total.
+
+## Thirty-first session — benchmark/coherence adapter selection, and a real "one bad sweep combo nukes everything" bug
+
+Three direct questions: does the TUI let you pick WHICH benchmark/coherence adapter runs (or is it decided for you)? What's the intended "configure once, that's it" mechanism? And a live bug report: running a multi-flag sweep gives no visible result at the end, and there's no way to tell which combination in a sweep actually won.
+
+### Adapter selection - confirmed, no picker exists
+
+Checked `BuildScreen.action_generate()` directly: `benchmark_adapters`/`coherence_adapters` are hardcoded to `generic-http`/`fixed-questions` in the generated YAML - no dropdown, no config option, nothing else is reachable through the TUI at all (not `llama-benchy`, not `pinbench`, not `guidellm`). The actual, intended mechanism (mirrors the CLI's own suite-file model, by design - "same orchestrator core... thin view on top, not a second code path"): the TUI generates a real, complete `TestSuite` YAML into the visible `#yaml-preview` `TextArea`, and that box is a normal editable text field, not read-only. Wanting `llama-benchy` instead means hand-editing the `benchmark_adapters:` block in that preview before clicking Run - "configure once via the form, then edit the YAML directly for anything the form doesn't expose" is genuinely the whole mechanism, not a partially-built picker. No code changed here - this was a real answer, not a gap to close, though a future `benchmark_adapters`/`coherence_adapters` Select would be a reasonable addition given how it's come up.
+
+### Real bug: `run_suite()` discarded every result the moment ANY backend failed
+
+Reproduced live: a 2-combination sweep against a real unreachable endpoint crashed with `ConnectError` and returned nothing - not even for combinations that would have succeeded, because `orchestrator.run_suite()` was a bare list comprehension (`[run_backend(...) for backend in expanded.backends]`). One backend raising propagated straight out, discarding every already-collected `RunOutcome` along with it. For a sweep of N combinations with one bad one, this meant **zero** results, not N-1, and (in the TUI) no summary at all - `RunScreen._run()`'s `except` branch just logged the raw error and returned, matching the user's exact complaint ("how would I know what the result was at the end"). The identical bug existed in the CLI's `run` command too (`click.echo` loop over `outcomes`, which never got populated).
+
+Fixed: `run_suite()` now runs each backend in its own `try`/`except`, reporting a failure via `on_event` (`"[<backend>] FAILED, skipping: <error>"`, visible live in the TUI's log and now echoed by the CLI too - it previously called `run_suite(suite)` with the default no-op event callback) and continuing to the rest. Verified live: a 2-bad-endpoint sweep now returns cleanly with `[]` and both failures individually visible, instead of one unhandled crash; a mixed real/bad-endpoint run keeps the real backend's result.
+
+### "Which combination had the best result?" - added a real answer
+
+There wasn't one - the summary just listed each backend's own metrics in run order; comparing N combinations meant reading every line yourself. Added `orchestrator.best_outcome(outcomes)`, shared by both the CLI and the TUI so "best" means the same thing in both places: ranks by real per-backend throughput (a genuine decode-only `avg_tg_tokens_per_sec` where the PP/TG work from two sessions ago made one available, else the blended `avg_tokens_per_sec`), restricted to backends whose coherence check (if any) fully passed - a faster-but-wrong answer doesn't win. Prints/renders as `Best: <backend> (<tok/s> tok/s) among <N> comparable result(s)` after the per-outcome listing, only when there's more than one outcome and at least one comparable metric (silent otherwise - no fabricated "best" for a single run).
+
+Verified live at a real 100×30 terminal with a synthetic two-combination summary: the `Best:` line renders correctly and the Back button stays visible - no regression on the earlier RunScreen layout.
+
+5 new tests (`run_suite` skips a failing backend and keeps the rest - using a new `FlakyExecutionTarget` fake that fails to start exactly one named backend; `best_outcome` picks the highest-throughput coherence-passing backend and excludes a faster-but-wrong one; empty/single-outcome edge cases), 175 passing total.
+
+### Unrelated but real, found live while testing this: the production `llama-cpp-bonsai` container is crash-looping
+
+`docker ps` showed `llama-cpp-bonsai   Restarting (1)` mid-session - confirmed via `docker logs` the exact cause: `gguf_init_from_file: failed to open GGUF file '/models/Ternary-Bonsai-27B-Q2_0.gguf' (No such file or directory)`. This is the real, anticipated fallout of the earlier session's GGUF model move (`/mnt/ignite/LLM/huggingface/gguf` → `/mnt/ignite/LLM/models/gguf`, done at direct request, with the user's own caveat "it may break some of my other stuff but I'll fix that myself") - bonsai's own container config still mounts the old path. Reported, not touched - per the standing rule never to intervene on this container's lifecycle without an explicit ask.

@@ -783,5 +783,17 @@ class RunScreen(Screen):
                 lines.append(f"    [{c.adapter}] {c.passed}/{c.total} passed")
             if outcome.delta_against:
                 lines.append(f"    (delta available against prior run {outcome.delta_against.run_id})")
+
+        # Direct user question: for a multi-backend/sweep run, how do you
+        # tell which combination had the best result? Shared ranking logic
+        # with the CLI (orchestrator.best_outcome) - decode-only tok/s
+        # where available, else blended, restricted to backends whose
+        # coherence check (if any) fully passed.
+        best = orchestrator.best_outcome(outcomes)
+        if best is not None:
+            best_throughput, best_name, comparable_count = best
+            lines.append("")
+            lines.append(f"[bold cyan]Best:[/bold cyan] {best_name} ({best_throughput:.2f} tok/s) among {comparable_count} comparable result(s)")
+
         summary_text = "\n".join(lines) if lines else "(no backends ran)"
         self.app.call_from_thread(self.query_one("#summary", Static).update, summary_text)
