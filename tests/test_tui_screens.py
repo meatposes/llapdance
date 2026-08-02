@@ -385,6 +385,17 @@ def test_default_sweep_values_never_suggests_env_string_for_a_bare_presence_flag
                 assert _default_sweep_values(entry) == "", f"{engine}.{name}: {entry}"
 
 
+def test_default_sweep_values_covers_vllms_presence_flags_now_that_they_have_a_verified_default():
+    # Direct follow-up audit ("check other engines' sweep params too"):
+    # vllm.py's own build() reads these via a plain params.get(name)
+    # truthy check (verified in that file), so unset (None) really is
+    # equivalent to False - a real, not fabricated, default.
+    load_builtin_adapters()
+    info = describe_engine("vllm")["params"]
+    for name in ("enable_auto_tool_choice", "trust_remote_code", "language_model_only"):
+        assert _default_sweep_values(info[name]) == "0,1", name
+
+
 def test_build_screen_sweep_values_prefills_a_real_default_on_selection(tmp_path):
     load_builtin_adapters()
     gguf = tmp_path / "test-model.gguf"
