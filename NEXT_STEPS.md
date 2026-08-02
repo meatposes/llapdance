@@ -179,6 +179,8 @@ Immediately found a real bug in the above, reported live: sweeping an env.* flag
 
 Audited every other sweep param for similar mismatches: no more crashes, but found a second bug - bare "presence"-type flags (ggml-sycl's GGML_SYCL_NO_PINNED, every GGML_VK_* flag) trigger on ANY set value including "0" (confirmed via real getenv()!=nullptr source), so the "0,1" default would sweep two runs with identical real behavior. Fixed: only suggest "0,1" for entries with a confirmed distinct-value convention (bool default, atoi, "'0' disables"); bare presence gets no suggestion. New test walks every real engine's real catalog to guard against this regressing for a newly added flag. 171 passing.
 
+Re-audited all 6 engines' full catalogs (119 entries) per follow-up request. Closed the one flagged gap: vLLM's enable_auto_tool_choice/trust_remote_code/language_model_only now have a verified default:False (confirmed via vllm.py's own truthy params.get() check), so they correctly suggest "0,1" - verified end to end through real sweep expansion + the translator. Everything else that suggests nothing (qxmx's GEMM tile ints, Arcaine's denoising/seed/placement params, every device-index string) checked individually against real source or documented evidence - genuinely no default exists for any of them, correctly left blank. 172 passing.
+
 ## Recommended next session
 
 Per the (now mostly-addressed) spec review, remaining real gaps in priority order:

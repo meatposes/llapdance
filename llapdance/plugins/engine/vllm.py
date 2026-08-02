@@ -100,9 +100,13 @@ class VLLMEngine(EngineTranslator):
         "quantization": {"type": "str", "maps_to": "--quantization", "note": "e.g. 'awq', 'compressed-tensors' - usually unnecessary, auto-detected from the checkpoint's own quantization_config"},
         "reasoning_parser": {"type": "str", "maps_to": "--reasoning-parser", "note": "e.g. 'qwen3'"},
         "tool_call_parser": {"type": "str", "maps_to": "--tool-call-parser", "note": "e.g. 'qwen3_xml'"},
-        "enable_auto_tool_choice": {"type": "bool", "maps_to": "--enable-auto-tool-choice (presence flag)"},
-        "trust_remote_code": {"type": "bool", "maps_to": "--trust-remote-code (presence flag)", "note": "needed for checkpoints shipping custom modeling_*.py, e.g. DeepSeek-V2-family"},
-        "language_model_only": {"type": "bool", "maps_to": "--language-model-only (presence flag)", "note": "skip loading a multimodal checkpoint's vision tower"},
+        # "default": False here is a real, verified fact, not a guess -
+        # this translator's own build() below reads these via a plain
+        # `params.get(name)` truthy check, so unset (None) is exactly
+        # equivalent to False.
+        "enable_auto_tool_choice": {"type": "bool", "default": False, "maps_to": "--enable-auto-tool-choice (presence flag)"},
+        "trust_remote_code": {"type": "bool", "default": False, "maps_to": "--trust-remote-code (presence flag)", "note": "needed for checkpoints shipping custom modeling_*.py, e.g. DeepSeek-V2-family"},
+        "language_model_only": {"type": "bool", "default": False, "maps_to": "--language-model-only (presence flag)", "note": "skip loading a multimodal checkpoint's vision tower"},
     }
 
     # Real env vars seen on the actual running vllm-urak container
