@@ -12,7 +12,7 @@ from llapdance.core.catalog import label_image as catalog_label_image
 from llapdance.core.catalog import list_images as catalog_list_images
 from llapdance.core.catalog import remove_image as catalog_remove_image
 from llapdance.core.model_catalog import annotate_tested_status, load_run_history, scan_models
-from llapdance.core.orchestrator import run_suite
+from llapdance.core.orchestrator import best_outcome, run_suite
 from llapdance.plugins.registry import available, describe_engine, load_builtin_adapters
 
 
@@ -36,7 +36,14 @@ def main() -> None:
 def run(suite_path: str, overrides: tuple[str, ...]) -> None:
     """Run a test suite defined in SUITE_PATH."""
     suite = load_suite(suite_path, parse_kv_overrides(list(overrides)))
-    outcomes = run_suite(suite)
+    # Real gap: run_suite() used to abort the ENTIRE run (silently
+    # discarding every already-succeeded backend) the moment any one
+    # backend raised - a sweep with N combinations and one bad one
+    # produced zero output, not N-1. It now skips a failing backend and
+    # reports it via on_event instead - echo those events live so a
+    # multi-backend/sweep run shows which combination failed, not just a
+    # final list of the ones that happened to succeed.
+    outcomes = run_suite(suite, on_event=click.echo)
     for outcome in outcomes:
         click.echo(f"\n=== {outcome.result.backend_name} ({outcome.result.run_id}) ===")
         for bench in outcome.result.benchmarks:
@@ -47,6 +54,15 @@ def run(suite_path: str, overrides: tuple[str, ...]) -> None:
             click.echo(f"  [{tel.adapter}] {tel.metrics}")
         if outcome.delta_against:
             click.echo(f"  delta against run {outcome.delta_against.run_id} available")
+
+    # Direct user question: for a multi-backend/sweep run, how do you tell
+    # which combination had the best result? Ranks by real per-backend
+    # throughput (decode-only tok/s where available, else blended),
+    # restricted to backends whose coherence check (if any) fully passed.
+    best = best_outcome(outcomes)
+    if best is not None:
+        best_throughput, best_name, comparable_count = best
+        click.echo(f"\nBest: {best_name} ({best_throughput:.2f} tok/s) among {comparable_count} comparable result(s)")
 
 
 @main.command()

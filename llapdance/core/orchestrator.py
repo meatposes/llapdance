@@ -348,5 +348,54 @@ def run_suite(suite: TestSuite, on_event: EventCallback = _noop_event) -> list[R
     # Expansion happens here, not at load time - get_suite/list_suites (CLI
     # and MCP) show the compact sweep-spec a suite author wrote; only an
     # actual run sees the expanded cartesian product (SPEC.md §10).
+    #
+    # Real bug found from direct user feedback: this used to be a bare
+    # list comprehension - if ANY one backend raised (a container crash,
+    # a connection refused, a bad model load), the exception propagated
+    # straight out and every backend's result was discarded, including
+    # ones that already ran successfully before the failure. For a sweep
+    # of N combinations, one bad combination meant zero results for all N,
+    # not N-1 - no summary, no partial data, nothing. Each backend now
+    # runs in its own try/except: a failure is reported via `on_event`
+    # (visible in the TUI's live log / CLI's echoed events) and skipped,
+    # the rest of the sweep continues.
     expanded = expand_suite_sweep(suite)
-    return [run_backend(expanded, backend, on_event) for backend in expanded.backends]
+    outcomes: list[RunOutcome] = []
+    for backend in expanded.backends:
+        try:
+            outcomes.append(run_backend(expanded, backend, on_event))
+        except Exception as exc:
+            on_event(f"[{backend.name}] FAILED, skipping: {exc}")
+    return outcomes
+
+
+def best_outcome(outcomes: list[RunOutcome]) -> tuple[float, str, int] | None:
+    """Real user question, direct feedback: for a multi-backend/sweep run,
+    how do you tell which combination had the best result? Shared here so
+    the CLI's `run` command and the TUI's `RunScreen` (each building its
+    own detailed per-outcome view - the CLI's includes telemetry, the
+    TUI's uses colored verdicts) agree on what "best" means.
+
+    Ranks by real per-backend throughput - preferring a genuine decode-
+    only `avg_tg_tokens_per_sec` (see generic_http.py's PP/TG split) over
+    the blended `avg_tokens_per_sec` when both exist, since TG is the more
+    comparable number across a sweep of otherwise-identical configs. Only
+    backends whose coherence check (if any) fully passed are eligible -
+    a faster but wrong answer isn't a real win, just a faster wrong
+    answer. Returns `(throughput, backend_name, comparable_count)`, or
+    `None` when there's nothing to rank (a single outcome, or no
+    comparable throughput metric anywhere)."""
+    ranked: list[tuple[float, str]] = []
+    for outcome in outcomes:
+        result = outcome.result
+        all_passed = all(c.passed == c.total for c in result.coherence) if result.coherence else None
+        if all_passed is False:
+            continue
+        for b in result.benchmarks:
+            throughput = b.metrics.get("avg_tg_tokens_per_sec", b.metrics.get("avg_tokens_per_sec"))
+            if throughput is not None:
+                ranked.append((throughput, result.backend_name))
+    if len(outcomes) <= 1 or not ranked:
+        return None
+    best_throughput, best_name = max(ranked, key=lambda r: r[0])
+    return best_throughput, best_name, len(ranked)

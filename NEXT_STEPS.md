@@ -181,6 +181,12 @@ Audited every other sweep param for similar mismatches: no more crashes, but fou
 
 Re-audited all 6 engines' full catalogs (119 entries) per follow-up request. Closed the one flagged gap: vLLM's enable_auto_tool_choice/trust_remote_code/language_model_only now have a verified default:False (confirmed via vllm.py's own truthy params.get() check), so they correctly suggest "0,1" - verified end to end through real sweep expansion + the translator. Everything else that suggests nothing (qxmx's GEMM tile ints, Arcaine's denoising/seed/placement params, every device-index string) checked individually against real source or documented evidence - genuinely no default exists for any of them, correctly left blank. 172 passing.
 
+## Thirty-first session addendum
+
+Confirmed the TUI has no benchmark/coherence adapter picker - hardcoded to generic-http/fixed-questions; intended mechanism is edit the generated YAML preview directly for anything else (same as the CLI's suite-file model). Found and fixed a real bug: run_suite() was a bare list comprehension - one backend failing in a multi-backend/sweep run discarded every other backend's result too (zero results, not N-1, no summary at all - same bug in CLI and TUI). Now skips a failing backend and reports it via on_event, continuing the rest. Added orchestrator.best_outcome() (shared by CLI+TUI) to answer "which combination won" - ranks by real per-backend throughput among coherence-passing backends only. 175 passing. Also found live (unrelated): production llama-cpp-bonsai is crash-looping because its volume mount still points at the pre-move gguf path - reported, not touched, per standing rule.
+
+Real gap still open, worth a future session: no benchmark_adapters/coherence_adapters picker in the TUI at all - a Select for these would close the "decided for you" complaint properly instead of relying on YAML hand-editing.
+
 ## Recommended next session
 
 Per the (now mostly-addressed) spec review, remaining real gaps in priority order:
