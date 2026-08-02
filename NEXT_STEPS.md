@@ -175,6 +175,8 @@ Ran 5 real live suites through the actual harness to populate the PP/TG results 
 
 Sweep-values field now prefills a real default when a param is picked, instead of an empty field with just a placeholder example. Derived from the same describe_engine() metadata (values/default/type) - enum params get their real values, anything boolean/binary-shaped gets "0,1" (confirmed uniform across every engine's actual parsing - no more guessing TRUE/FALSE vs ON/OFF), a numeric default gets bracketed around it. Still a plain editable Input. Added the one legitimately-known missing default (llama.cpp's parallel_slots=4, already documented in both translators' own docstrings). 168 passing.
 
+Immediately found a real bug in the above, reported live: sweeping an env.* flag with the new "0,1" default crashed pydantic ("Input should be a valid string... input_type=int") - BackendConfig.env is dict[str,str], but the coercion helper turned "0"/"1" into real ints uniformly. Fixed: env.* sweep values now stay strings, only params.* get numeric coercion. New test calls expand_backend_sweep() directly (the actual crash site) rather than just validating the compact suite form. 169 passing.
+
 ## Recommended next session
 
 Per the (now mostly-addressed) spec review, remaining real gaps in priority order:

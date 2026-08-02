@@ -795,3 +795,13 @@ Also added one legitimately-known missing default: `llama-cpp-sycl`/`llama-cpp-v
 Verified live: `context_size` → `"2048,4096"`, `kv_cache_quant` → `"f16,q8_0"` (or `"f16,q8_0,f8"` for qxmx, correctly per-engine), `reasoning` → `"on,off,auto"`, `GGML_SYCL_ENABLE_GRAPH` → `"0,1"`, `GGML_SYCL_MKL_FA_Q_TILE` (default 8192) → `"4096,8192"`, `parallel_slots` (qxmx, default 1) → `"1,2"`. Re-confirmed at a real 100×30 terminal that every button (including `+ axis`) is still visible - no regression on the earlier DataTable-height fix.
 
 9 new tests (helper unit tests covering every branch, plus a live prefill-on-selection test), 168 passing total.
+
+### Real bug found immediately after shipping the above: env sweep values crashed pydantic validation
+
+Direct user report, real error text: `Input should be a valid string [type=string_type, input_value=0, input_type=int]` on `env.GGML_SYCL_ENABLE_GRAPH`/`env.GGML_SYCL_ENABLE_DNN`/`env.GGML_SYCL_FA_ONEDNN` - i.e. exactly the new `"0,1"` defaults this session just added, clicked through as-is.
+
+Root cause: `BackendConfig.env` is `dict[str, str]` (env vars are always strings at the OS/docker level) - `_coerce_sweep_value` coerces `"0"`/`"1"` to real ints for convenience on `params.shared`/`params.backend_specific` (open `Any` dicts, where that's correct and intentional), but was applied uniformly to `env.*` sweep values too. The int survives suite-YAML validation fine (`SweepAxis.values` is `list[Any]`) and only blows up when `llapdance/config/sweep.py`'s `expand_backend_sweep()` writes it into the expanded backend's `env` dict and re-validates - which is why the earlier multi-axis sweep tests (all `params.shared.*`) never caught it.
+
+Fixed with `_coerce_sweep_value_for_param(param, raw)`: skips numeric coercion entirely when `param` starts with `env.`, keeping those values as plain strings; both call sites (`_parse_sweep_axes_text`, `action_generate`'s builder-row fold-in) switched to it. Verified via `expand_backend_sweep()` directly (the actual code path that crashed) - `env.GGML_SYCL_ENABLE_GRAPH` swept across `["0", "1"]` now expands cleanly into two real backends with `env == {"GGML_SYCL_ENABLE_GRAPH": "0"}` / `{"...": "1"}`, no crash.
+
+New regression test goes one step further than the existing sweep tests specifically because they didn't catch this: it calls `expand_backend_sweep()` on the real generated backend, not just `TestSuite.model_validate()` on the compact form. 169 passing total.

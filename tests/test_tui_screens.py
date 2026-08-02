@@ -303,7 +303,11 @@ def test_parse_sweep_axes_text_handles_multiple_lines():
     axes = _parse_sweep_axes_text(text)
     assert axes == [
         {"param": "params.shared.context_size", "values": [2048, 4096]},
-        {"param": "env.GGML_SYCL_ENABLE_GRAPH", "values": [0, 1]},
+        # Real bug found live: BackendConfig.env is dict[str, str] - an
+        # env.* sweep value must stay a string ("0"/"1"), never coerce to
+        # a real int like params.shared.* does, or sweep expansion fails
+        # pydantic validation the moment it writes into the env dict.
+        {"param": "env.GGML_SYCL_ENABLE_GRAPH", "values": ["0", "1"]},
     ]
 
 
@@ -440,6 +444,51 @@ def test_build_screen_generate_applies_multiple_sweep_axes(tmp_path):
 
             status = str(screen.query_one("#build-status", Static).render())
             assert "4 runs" in status  # 2 * 2 combinations
+
+    asyncio.run(scenario())
+
+
+def test_build_screen_env_sweep_survives_real_expansion(tmp_path):
+    # Real bug, found live: "Input should be a valid string [type=
+    # string_type, input_value=0, input_type=int]" - BackendConfig.env is
+    # dict[str, str], but sweeping env.GGML_SYCL_ENABLE_GRAPH with the
+    # TUI's own suggested default ("0,1") coerced those to real ints,
+    # which crashed the moment sweep.py's expand_backend_sweep() wrote
+    # them into the expanded backend's env dict and re-validated it. The
+    # compact TestSuite.model_validate() in the other sweep tests doesn't
+    # catch this - SweepAxis.values is `list[Any]` - only real expansion
+    # does, which is why this test goes one step further than the others.
+    load_builtin_adapters()
+    gguf = tmp_path / "test-model.gguf"
+    gguf.write_bytes(b"x")
+    model = ModelInfo(path=str(gguf), format="gguf", compatible_engines=["llama-cpp-sycl"])
+
+    async def scenario():
+        app = LLAPDanceApp()
+        async with app.run_test() as pilot:
+            await app.push_screen(BuildScreen(model))
+            await pilot.pause()
+            screen = app.screen
+
+            screen.query_one("#image", Input).value = "llama-cpp-bonsai:meat6-hardened"
+            screen.query_one("#sweep-param", Select).value = "env.GGML_SYCL_ENABLE_GRAPH"
+            await pilot.pause()
+            # the TUI's own suggested default for this param - exactly
+            # what a user clicking through, not hand-typing, would sweep
+            assert screen.query_one("#sweep-values", Input).value == "0,1"
+            screen.action_generate()
+            await pilot.pause()
+
+            raw = screen.query_one("#yaml-preview", TextArea).text
+            suite = TestSuite.model_validate(yaml.safe_load(raw))
+            assert suite.backends[0].sweep[0].values == ["0", "1"]
+
+            from llapdance.config.sweep import expand_backend_sweep
+
+            expanded = expand_backend_sweep(suite.backends[0])
+            assert len(expanded) == 2
+            assert expanded[0].env["GGML_SYCL_ENABLE_GRAPH"] == "0"
+            assert expanded[1].env["GGML_SYCL_ENABLE_GRAPH"] == "1"
 
     asyncio.run(scenario())
 
