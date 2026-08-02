@@ -1,4 +1,5 @@
 import asyncio
+from unittest.mock import patch
 
 import yaml
 from textual.widgets import DataTable, Input, Select, Static, TextArea
@@ -14,9 +15,15 @@ from llapdance.tui.screens import (
     ModelBrowserScreen,
     _coerce_sweep_value,
     _default_model_path_and_volumes,
+    _local_image_options,
     _short_model_name,
     _tested_summary,
 )
+
+_FAKE_IMAGES = [
+    {"id": "1", "tags": ["arcaine-server:qwen35fix"], "size": 0},
+    {"id": "2", "tags": ["llapdance/qxmx-from-source:main-abc123"], "size": 0},
+]
 
 
 def test_short_model_name_strips_scan_root_prefix():
@@ -284,6 +291,50 @@ def test_build_screen_generate_applies_real_sweep_axis(tmp_path):
             assert len(sweep) == 1
             assert sweep[0].param == "params.shared.context_size"
             assert sweep[0].values == [2048, 4096]  # real ints, not strings
+
+    asyncio.run(scenario())
+
+
+def test_local_image_options_filters_by_engine_name():
+    # real bug found from direct user feedback (screenshot): the image
+    # picker listed every local image unfiltered, and defaulted to
+    # whichever docker returned first - an unrelated arcaine image while
+    # the engine was qxmx. Filtering by engine-name substring (the same
+    # name_filter list_images already supports) fixes it.
+    with patch("llapdance.tui.screens.list_images", return_value=[
+        {**img, "label": None, "runs": []} for img in _FAKE_IMAGES if "qxmx" in img["tags"][0]
+    ]):
+        options = _local_image_options("qxmx")
+    assert options == [("llapdance/qxmx-from-source:main-abc123", "llapdance/qxmx-from-source:main-abc123")]
+
+
+def test_build_screen_image_picker_refreshes_on_engine_change(tmp_path):
+    load_builtin_adapters()
+    gguf = tmp_path / "test-model.gguf"
+    gguf.write_bytes(b"x")
+    model = ModelInfo(path=str(gguf), format="gguf", compatible_engines=["llama-cpp-sycl", "qxmx"])
+
+    def fake_list_images(execution, catalog_dir=None, name_filter=None):
+        matches = [img for img in _FAKE_IMAGES if not name_filter or name_filter in img["tags"][0]]
+        return [{**img, "label": None, "runs": []} for img in matches]
+
+    async def scenario():
+        with patch("llapdance.tui.screens.list_images", side_effect=fake_list_images):
+            app = LLAPDanceApp()
+            async with app.run_test() as pilot:
+                await app.push_screen(BuildScreen(model))
+                await pilot.pause()
+                screen = app.screen
+
+                # default engine is llama-cpp-sycl (first compatible) - no
+                # local image matches that name in the fake set, so the
+                # picker must NOT fall back to the arcaine image
+                assert screen.query_one("#image", Input).value == ""
+                assert "arcaine" not in str(screen.query_one("#image-select", Select).value)
+
+                screen.query_one("#engine", Select).value = "qxmx"
+                await pilot.pause()
+                assert screen.query_one("#image", Input).value == "llapdance/qxmx-from-source:main-abc123"
 
     asyncio.run(scenario())
 

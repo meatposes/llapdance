@@ -302,14 +302,24 @@ class BackendBrowserScreen(Screen):
             self.action_back()
 
 
-def _local_image_options() -> list[tuple[str, str]]:
+def _local_image_options(engine: str | None = None) -> list[tuple[str, str]]:
     """Real local docker images (the same `LocalDockerExecutionTarget.list_images()`
     the CLI's `llapdance images` command uses) - so a user picks from what
-    actually exists on this machine instead of typing a tag from memory."""
+    actually exists on this machine instead of typing a tag from memory.
+
+    Real bug found from direct user feedback (screenshot): with no filter,
+    this listed every local image regardless of engine, and the picker
+    defaulted to whatever docker returned first - which was an unrelated
+    `arcaine-server:qwen35fix` image while the engine was `qxmx`, silently
+    filling both the Select AND the Input with a mismatched image. Filter
+    to tags containing the engine name (same substring `name_filter`
+    `list_images` already supports, e.g. "qxmx" matches
+    `llapdance/qxmx-from-source:...`, "arcaine" matches `arcaine-server:*`)
+    so the default can't come from an unrelated engine's image."""
     from llapdance.plugins.execution.local_docker import LocalDockerExecutionTarget
 
     try:
-        images = list_images(LocalDockerExecutionTarget({}), catalog_dir="./results")
+        images = list_images(LocalDockerExecutionTarget({}), catalog_dir="./results", name_filter=engine)
     except Exception:
         return []
     options = []
@@ -346,7 +356,7 @@ class BuildScreen(Screen):
                     id="device",
                     value=devices[0].index if devices else Select.NULL,
                 )
-            image_options = _local_image_options()
+            image_options = _local_image_options(default_engine if default_engine != Select.NULL else None)
             with Horizontal():
                 yield Select(
                     image_options,
@@ -402,6 +412,16 @@ class BuildScreen(Screen):
             self.query_one("#image", Input).value = str(event.value)
         elif event.select.id == "engine":
             self._refresh_sweep_options()
+            self._refresh_image_options()
+
+    def _refresh_image_options(self) -> None:
+        engine = self.query_one("#engine", Select).value
+        image_options = _local_image_options(engine if engine != Select.NULL else None)
+        image_select = self.query_one("#image-select", Select)
+        image_select.set_options(image_options)
+        new_value = image_options[0][1] if image_options else Select.NULL
+        image_select.value = new_value
+        self.query_one("#image", Input).value = image_options[0][1] if image_options else ""
 
     def action_back(self) -> None:
         self.app.pop_screen()
