@@ -171,6 +171,10 @@ Extended generic-http to report a real PP/TG split (llama.cpp's own server-side 
 
 Ran 5 real live suites through the actual harness to populate the PP/TG results artifact: qxmx (new real PP/TG), OpenArc (new real finding - it exposes usage.prompt_tokens too), Arcaine (re-confirmed genuinely blended-only, not a gap), vllm-urak and llama-cpp-bonsai (both external/read-only, needed request_extra for stream_options.include_usage / cache_prompt:false respectively). Found and fixed a real crash: fixed-questions coherence AttributeError against vLLM's Ornith model, which returns its answer in a non-standard `reasoning` field with content:null - same failure class as the llama-cpp-sycl reasoning gotcha. 162 passing. Artifact republished with 39 records, 5 with real PP/TG (up from 1).
 
+## Thirtieth session addendum
+
+Sweep-values field now prefills a real default when a param is picked, instead of an empty field with just a placeholder example. Derived from the same describe_engine() metadata (values/default/type) - enum params get their real values, anything boolean/binary-shaped gets "0,1" (confirmed uniform across every engine's actual parsing - no more guessing TRUE/FALSE vs ON/OFF), a numeric default gets bracketed around it. Still a plain editable Input. Added the one legitimately-known missing default (llama.cpp's parallel_slots=4, already documented in both translators' own docstrings). 168 passing.
+
 ## Recommended next session
 
 Per the (now mostly-addressed) spec review, remaining real gaps in priority order:

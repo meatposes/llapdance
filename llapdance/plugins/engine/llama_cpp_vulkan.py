@@ -76,7 +76,12 @@ class LlamaCppVulkanEngine(EngineTranslator):
         "context_size": {"type": "int", "default": 4096, "maps_to": "-c"},
         "batch_size": {"type": "int", "maps_to": "-b / -ub (same value both)"},
         "kv_cache_quant": {"type": "str", "values": ["f16", "q8_0"], "maps_to": "--cache-type-k / --cache-type-v"},
-        "parallel_slots": {"type": "int", "maps_to": "--parallel"},
+        # "default": 4 is llama.cpp core's own "auto" behavior when unset
+        # (confirmed in the SYCL translator's validated run, see
+        # llama_cpp_sycl.py - parallel-slot scheduling is core llama.cpp,
+        # not GGML-backend-specific) - --parallel is omitted entirely
+        # unless a suite sets this explicitly.
+        "parallel_slots": {"type": "int", "default": 4, "maps_to": "--parallel"},
         "reasoning": {"type": "str", "values": ["on", "off", "auto"], "default": "auto", "maps_to": "LLAMA_ARG_REASONING env"},
     }
 
