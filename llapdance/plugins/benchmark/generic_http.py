@@ -165,6 +165,24 @@ class GenericHttpBenchmark(BenchmarkAdapter):
                     for line in resp.iter_lines():
                         if not line:
                             continue
+                        if line.startswith(":"):
+                            # Real bug found live comparing PP against
+                            # llama-benchy on the same qxmx server: a
+                            # line starting with ":" is an SSE COMMENT/
+                            # keepalive per spec (qxmx sends "': hb'"
+                            # while a long prefill is still in progress,
+                            # confirmed by capturing the raw stream) -
+                            # clients MUST ignore these, not treat them as
+                            # a real event. Counting one as "first byte"
+                            # made TTFT (and everything derived from it -
+                            # PP/TG) measure "time until the first
+                            # keepalive ping" instead of "time until the
+                            # first real token", which is a different,
+                            # unrelated number - confirmed live: PP was
+                            # off by 10x+ against llama-benchy's real
+                            # measurement on an identical backend/model/
+                            # prompt until this was fixed.
+                            continue
                         if first_byte_at is None:
                             first_byte_at = time.perf_counter()
                         sse_line_count += 1

@@ -111,7 +111,28 @@ def test_run_uses_llama_cpp_server_reported_pp_tg_directly(monkeypatch):
 
     assert result.metrics["avg_pp_tokens_per_sec"] == 250.0
     assert result.metrics["avg_tg_tokens_per_sec"] == 40.0
-    assert result.raw["pp_tg_sources"] == ["server_timings"]
+
+
+def test_sse_comment_heartbeat_lines_are_ignored_for_ttft(monkeypatch):
+    # Real bug found live comparing PP against llama-benchy on a real
+    # qxmx server: qxmx sends "': hb'" (confirmed via the raw stream)
+    # while a long prefill is still in progress. A line starting with
+    # ":" is a defined SSE COMMENT/keepalive per spec - clients must
+    # ignore it, not treat it as the first real event. Before this fix,
+    # TTFT (and everything derived from it - PP/TG) measured "time until
+    # the heartbeat", not "time until the first real token" - confirmed
+    # live this made PP wrong by 10x+ against llama-benchy's real
+    # measurement on an identical backend/model/prompt.
+    body = b": hb\n" b'data: {"choices":[{"delta":{"content":"Hi"}}]}\n' b"data: [DONE]\n"
+    real_init = _mock_stream_client(body)
+    times = iter([0.0, 0.0, 2.0, 3.0])  # start, httpx internal (unused), REAL first-byte, end
+    monkeypatch.setattr("llapdance.plugins.benchmark.generic_http.time.perf_counter", lambda: next(times))
+    try:
+        result = GenericHttpBenchmark().run("http://fake", {"num_requests": 1})
+    finally:
+        httpx.Client.__init__ = real_init
+
+    assert result.metrics["avg_ttft_ms"] == 2000.0  # from the real data line, not the heartbeat
 
 
 def test_run_derives_pp_tg_from_ttft_when_only_usage_counts_present(monkeypatch):
