@@ -74,6 +74,21 @@ def _coerce_sweep_value(raw: str) -> Any:
     return raw
 
 
+def _coerce_sweep_value_for_param(param: str, raw: str) -> Any:
+    """Real bug found live: `BackendConfig.env` is strictly `dict[str, str]`
+    (env vars are always strings at the OS/docker level, never real ints)
+    - coercing an `env.<NAME>` sweep value like "0"/"1" to an actual int
+    (as `_coerce_sweep_value` does for params.shared/backend_specific,
+    which are open `Any` dicts) fails pydantic validation the moment
+    `sweep.py` writes it into the expanded backend's `env` dict
+    ("Input should be a valid string [type=string_type, input_value=0,
+    input_type=int]"). `env.*` sweep values are left as plain strings;
+    only `params.*` paths get numeric coercion."""
+    if param.startswith("env."):
+        return raw
+    return _coerce_sweep_value(raw)
+
+
 def _parse_sweep_axes_text(text: str) -> list[dict[str, Any]]:
     """Parses the `#sweep-axes` box's `param=values` lines (one per axis,
     blank lines ignored) into real `{"param", "values"}` dicts - the same
@@ -91,7 +106,7 @@ def _parse_sweep_axes_text(text: str) -> list[dict[str, Any]]:
             raise ValueError(f"sweep axis line {lineno} ({line!r}) must be 'param=values', e.g. 'params.shared.context_size=2048,4096'")
         param, raw_values = line.split("=", 1)
         param = param.strip()
-        values = [_coerce_sweep_value(v.strip()) for v in raw_values.split(",") if v.strip()]
+        values = [_coerce_sweep_value_for_param(param, v.strip()) for v in raw_values.split(",") if v.strip()]
         if not param or not values:
             raise ValueError(f"sweep axis line {lineno} ({line!r}) needs both a param and at least one value")
         axes.append({"param": param, "values": values})
@@ -655,7 +670,7 @@ class BuildScreen(Screen):
         sweep_param = self.query_one("#sweep-param", Select).value
         sweep_values_raw = self.query_one("#sweep-values", Input).value.strip()
         if sweep_param != Select.NULL and sweep_values_raw:
-            values = [_coerce_sweep_value(v.strip()) for v in sweep_values_raw.split(",") if v.strip()]
+            values = [_coerce_sweep_value_for_param(sweep_param, v.strip()) for v in sweep_values_raw.split(",") if v.strip()]
             axes.append({"param": sweep_param, "values": values})
 
         if axes:
