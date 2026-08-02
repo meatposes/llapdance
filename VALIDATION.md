@@ -692,9 +692,45 @@ Verified live: a real pilot at `size=(100, 30)` (matching the earlier DataTable-
 
 | Adapter | Status |
 |---|---|
+## Twenty-eighth session — generic-http PP/TG split, cross-checked live against llama-benchy
+
+Direct request: the earlier "PP/TG data mostly missing" gap (33 of 34 stored results only had a blended tok/s number) needed a real fix, not just a diagnosis - extend `generic-http` to measure PP and TG separately, then validate the new numbers against the one real `llama-benchy` result on file for the same model to see if they agree.
+
+### What was added
+
+`generic_http.py` now tries two real sources for a PP/TG split, in order, never fabricating one:
+
+1. **`timings.prompt_per_second` / `timings.predicted_per_second`** - llama.cpp's OWN server-side split (confirmed via this project's local llama.cpp checkout, `tools/server/server-task.cpp`: `timings.prompt_n`/`predicted_n`/`prompt_per_second`/`predicted_per_second` are computed server-side and pushed onto the final chunk unconditionally - this adapter already read `timings.predicted_n` from the same object for token counting, so no new chunk parsing was needed, just reading more of what was already there). Most accurate - excludes client/network overhead entirely.
+2. **`usage.prompt_tokens` + `usage.completion_tokens`** (confirmed present together in qxmx's real responses, `tools/qxmx_serve.cpp`), with no server timing object: PP derived as `prompt_tokens / ttft`, TG as `(completion_tokens - 1) / (total - ttft)` - the same TTFT-based approximation llama-bench-style tools use (prefill ends at the first token).
+
+If neither exists (Arcaine/OpenArc/vLLM's real captured responses have neither), PP/TG are **left out of `metrics` entirely** - never backfilled with a guess or a fake `0.0`. Blended `avg_tokens_per_sec` is untouched, so every prior result/test stays valid. Added `request_extra` (raw passthrough dict merged into the request body) alongside this - needed for the honest comparison below, see the gotcha.
+
+7 new tests (source-priority unit tests + 3 full `run()`-level tests against a mocked SSE stream shaped like each of: llama.cpp's timings object, qxmx's usage-only shape, and Arcaine/OpenArc's neither-shape - plus `request_extra` passthrough), 160 passing total.
+
+### Real gotcha found live, comparing against llama-benchy
+
+First live comparison (against the real, already-running production `llama-cpp-bonsai` container, `source.mode: external`, read-only, lifecycle never touched, confirmed via `docker ps -a` before and after) looked broken: TG lined up well (~18.5 tok/s vs llama-benchy's stored 17.3 tok/s, ~7% apart), but PP did not (22–55 tok/s vs llama-benchy's stored 335.7 tok/s - over 10x off).
+
+Root cause, found by reading the actual `timings` object instead of guessing: llama.cpp's server has **prompt caching on by default** (`cache_n` in `timings`). This adapter's default prompt is short and gets sent repeatedly across a benchmark's `num_requests` - confirmed live that a repeat request reused 18 of the prompt's tokens from cache and only prefilled 4 fresh ones, so "prompt_per_second" was measuring a tiny, batch-size-starved handful of tokens, nothing like the large-batch prefill llama-benchy measured (`prompt_size: 2048`, `cache_prompt` not applicable to its own harness).
+
+Fixed the comparison, not the adapter's default behavior (a warm-cache PP number is real and useful for a "second identical request" scenario - it just isn't the number to compare against a synthetic large-prompt benchmark): passed `request_extra: {"cache_prompt": false}` plus a genuinely large, unique (non-cacheable) ~7400-token synthetic prompt. Result, through the actual registered adapter, live:
+
+| Source | PP tok/s | TG tok/s | Prompt size |
+|---|---|---|---|
+| `llama-benchy` (stored result, `bonsai-llama-benchy`) | 335.7 | 17.3 | 2048 (synthetic) |
+| `generic-http`, cache disabled (this session, live) | 297.6 | 16.3 | ~7430 (synthetic, unique) |
+
+**They line up** - PP within ~11%, TG within ~6%, well inside normal run-to-run GPU/thermal/contention variance and the two tools' different exact prompt/response lengths. This is real cross-validation that the new PP/TG numbers are measuring the same real thing llama-benchy measures, not an artifact of this adapter's own implementation - once the prompt-caching confound is controlled for.
+
+Container confirmed still healthy and untouched throughout (`docker ps -a`: `llama-cpp-bonsai   Up 4 days (healthy)`, unchanged).
+
+### Real doors this opens
+
+`llama-benchy` is far more thorough (concurrency sweeps, percentile stats, multiple prompt/response-size combinations) - this doesn't replace it. But every backend already validated with `generic-http` (arcaine/openarc/qxmx/vllm, five real servers total) that turns out to expose either signal above now gets a real PP/TG split for free, no new integration needed, and llama.cpp-family backends (`llama-cpp-sycl`, `llama-cpp-vulkan`) get the MOST accurate version (server-side timings) automatically, with zero config.
+
 | `local-docker` execution | Real, validated against **four** different engines (llama.cpp, qxmx, Arcaine, OpenArc) on real GPU hardware, plus a real build-from-source run. |
 | `ssh-docker` execution | **Built and validated.** Real remote host, real stop/test/restore cycle around the host's own production container. `prebuilt` only for now (see above). |
-| `generic-http` benchmark | Real, validated against five different real servers/paths (four engines + external/llm-proxy), all producing real TTFT/throughput numbers. Token-counting bug found and fixed (see below) - now records `counted_via` per request. |
+| `generic-http` benchmark | Real, validated against five different real servers/paths (four engines + external/llm-proxy), all producing real TTFT/throughput numbers. Token-counting bug found and fixed (see below) - now records `counted_via` per request. **PP/TG split added and cross-validated live against a real `llama-benchy` run on the same backend (see below)** - lines up within ~11%/~6% once a prompt-caching confound is controlled for via the new `request_extra` passthrough. |
 | `fixed-questions` coherence | Real, validated — 10/10 (or a genuine 9/10 model error) across five different real backends/paths. (An earlier draft of this doc claimed it also caught a "tokenizer crash bug" — retracted, see above; that crash was my invalid test setup, not a finding.) |
 | `flat-file` storage | Real, validated — write + delta-lookup both exercised, across all backends including external mode. |
 | `opensearch` storage | Built and validated (prior session). Real write+query round-trip against a live instance, including catching and fixing a silent timestamp-precision bug. Storage fan-out (flat-file + opensearch simultaneously) confirmed. |
