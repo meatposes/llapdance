@@ -177,6 +177,8 @@ Sweep-values field now prefills a real default when a param is picked, instead o
 
 Immediately found a real bug in the above, reported live: sweeping an env.* flag with the new "0,1" default crashed pydantic ("Input should be a valid string... input_type=int") - BackendConfig.env is dict[str,str], but the coercion helper turned "0"/"1" into real ints uniformly. Fixed: env.* sweep values now stay strings, only params.* get numeric coercion. New test calls expand_backend_sweep() directly (the actual crash site) rather than just validating the compact suite form. 169 passing.
 
+Audited every other sweep param for similar mismatches: no more crashes, but found a second bug - bare "presence"-type flags (ggml-sycl's GGML_SYCL_NO_PINNED, every GGML_VK_* flag) trigger on ANY set value including "0" (confirmed via real getenv()!=nullptr source), so the "0,1" default would sweep two runs with identical real behavior. Fixed: only suggest "0,1" for entries with a confirmed distinct-value convention (bool default, atoi, "'0' disables"); bare presence gets no suggestion. New test walks every real engine's real catalog to guard against this regressing for a newly added flag. 171 passing.
+
 ## Recommended next session
 
 Per the (now mostly-addressed) spec review, remaining real gaps in priority order:

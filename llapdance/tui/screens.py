@@ -125,12 +125,27 @@ def _default_sweep_values(info: dict[str, Any]) -> str:
     a fabricated one.
 
     On/off spelling: checked every engine's actual parsing this project
-    has (qxmx's `atoi`, ggml-sycl/vulkan's `getenv(...) != nullptr` or
-    `ggml_sycl_get_env` int parsing, vLLM's own truthy `params.get(...)`
-    checks in vllm.py's build()) - every single one treats a plain "0"/"1"
-    string correctly (falsy/truthy, or exact match for the "0 disables"
-    ones), so "0,1" is a real, uniform answer across this whole codebase,
-    not a per-engine guess."""
+    has - qxmx's `atoi`, vLLM's truthy `params.get(...)` checks (vllm.py's
+    `build()`), Arcaine's multi-spelling parser (unset/'0'/'off'/'false'/
+    'no' = disabled, confirmed identical across every ARCAINE_QWEN35_*
+    bool flag by reading each one's real `getenv()` call site, not just
+    the one documented in `ARCAINE_QWEN35_NVFP4_DPAS`'s note) - "0,1" is a
+    real, distinct-behavior pair for all of these.
+
+    GOTCHA found auditing this after a real bug report: this is NOT
+    universal. Several "presence"-type flags (ggml-sycl's
+    `GGML_SYCL_NO_PINNED`, every bare-`presence` `GGML_VK_*` flag in
+    ggml-vulkan, confirmed via their real `getenv(...) != nullptr` call
+    sites) treat ANY set value - including the string `"0"` - as
+    "enabled". Sweeping `"0,1"` for one of these would silently produce
+    two runs with IDENTICAL real behavior (both "flag present"), not a
+    real A/B - worse than no suggestion, since it looks like a valid
+    sweep. Only flags whose catalog note explicitly says a specific value
+    disables them (`"value '0' disables"`, qxmx's `QXMX_FD`/`FOLD`/`VEC`)
+    or that are numerically/boolean-typed (`bool`, `0/1`, `atoi`) get the
+    "0,1" suggestion; a bare `presence` type gets none - there is no way
+    to express "leave this env var unset" as one value of a sweep axis,
+    so no default pair can honestly represent that comparison."""
     values = info.get("values")
     if values:
         return ",".join(str(v) for v in values)
@@ -138,8 +153,15 @@ def _default_sweep_values(info: dict[str, Any]) -> str:
     type_str = str(info.get("type", "")).lower()
     default = info.get("default")
 
-    if isinstance(default, bool) or "bool" in type_str or "presence" in type_str or "0/1" in type_str:
+    # NOTE: matching on "'0' disables" specifically, NOT a bare "disables" -
+    # ggml-sycl's GGML_SYCL_NO_PINNED also contains the word "disables"
+    # ("any non-empty value disables...") but is the generic/degenerate
+    # case below, not this one. Confirmed via each flag's real source.
+    if isinstance(default, bool) or "0/1" in type_str or "atoi" in type_str or "'0' disables" in type_str:
         return "0,1"
+
+    if "presence" in type_str:
+        return ""
 
     if isinstance(default, (int, float)) and not isinstance(default, bool):
         if isinstance(default, int) and default < 2:
