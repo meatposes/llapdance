@@ -167,6 +167,10 @@ TUI sweep was single-axis only; added a `+ axis` button + a height-capped `#swee
 
 Extended generic-http to report a real PP/TG split (llama.cpp's own server-side timings preferred, TTFT-derived split from usage.prompt_tokens+completion_tokens as fallback, omitted entirely when neither signal exists - no fabricated numbers). Live-compared against the one stored llama-benchy result (same model, same real production llama-cpp-bonsai container): lined up well (PP 297.6 vs 335.7 tok/s, TG 16.3 vs 17.3 tok/s) once a real gotcha was controlled for - llama.cpp's default prompt caching makes a short/repeated prompt report a near-meaningless PP number (confirmed live: 18 of 22 prompt tokens served from cache on a repeat request). Added `request_extra` config passthrough (e.g. `{"cache_prompt": false}`) to get an honest measurement. 160 passing. Production container confirmed untouched throughout.
 
+## Twenty-ninth session addendum
+
+Ran 5 real live suites through the actual harness to populate the PP/TG results artifact: qxmx (new real PP/TG), OpenArc (new real finding - it exposes usage.prompt_tokens too), Arcaine (re-confirmed genuinely blended-only, not a gap), vllm-urak and llama-cpp-bonsai (both external/read-only, needed request_extra for stream_options.include_usage / cache_prompt:false respectively). Found and fixed a real crash: fixed-questions coherence AttributeError against vLLM's Ornith model, which returns its answer in a non-standard `reasoning` field with content:null - same failure class as the llama-cpp-sycl reasoning gotcha. 162 passing. Artifact republished with 39 records, 5 with real PP/TG (up from 1).
+
 ## Recommended next session
 
 Per the (now mostly-addressed) spec review, remaining real gaps in priority order:

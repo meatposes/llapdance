@@ -748,3 +748,31 @@ Container confirmed still healthy and untouched throughout (`docker ps -a`: `lla
 | Model catalog + format/backend compatibility (new, not in original spec) | **Built and validated** against ground truth - all 3 previously-validated cross-format models matched exactly. |
 | Embedded-DB / Prometheus storage | Not built. |
 | `params.shared` → per-engine `command`/`env`/`devices`/`post_start_requests` translation | Built and validated against four engines (prior session). Raw passthrough remains available for anything a translator doesn't cover. |
+
+## Twenty-ninth session — real PP/TG data run across every engine, one real crash found and fixed
+
+Direct follow-up to the PP/TG work: "run our models through using our tooling" - 5 real live runs through the actual harness (not ad hoc scripts), to see which real backends' PP/TG support holds up and to populate the results artifact with genuine new data.
+
+Device index 3 (`renderD131`, PCI `0000:8a:00.0`) confirmed idle via `xpumcli`/`probe.discover_devices()` before starting anything - devices 1 and 2 are the real production `llama-cpp-bonsai`/`vllm-urak` containers, never targeted.
+
+**qxmx** (`examples/validation-qxmx-pptg.suite.yaml`, real container boot+teardown): PP 64.3, TG 25.0 tok/s (`ttft_split` source, as expected - qxmx has no server timings). 10/10 coherence. Volumes path updated to the new `/mnt/ignite/LLM/models/gguf` location from the earlier move.
+
+**OpenArc** (`validation-openarc-qwen3-0.6b.suite.yaml`, real container boot+teardown): PP 156.7, TG 414.0 tok/s. **Real new finding**: OpenArc DOES expose `usage.prompt_tokens` - the original PP/TG session hadn't run a live check against it and had assumed (correctly cautious, but not confirmed) it might not. Closes another real backend, not just qxmx/llama.cpp-family.
+
+**Arcaine** (`validation-arcaine.suite.yaml`, real container boot+teardown, diffusiongemma model): blended-only, confirmed again live (16.24 tok/s, consistent with the prior 16.35 stored result). **Re-confirmed, not a gap**: Arcaine's real HTTP responses genuinely carry no prompt-token count anywhere - checked directly against a live container, not assumed from source alone this time.
+
+**vllm-urak** (new `validation-vllm-urak-pptg.suite.yaml`, `source.mode: external`, read-only, lifecycle never touched): PP 403.6, TG 84.4 tok/s. Needed `request_extra: {stream_options: {include_usage: true}}` - confirmed live that vLLM's stream carries NO `usage` object by default, only when a client explicitly asks via the standard OpenAI `stream_options.include_usage` flag (confirmed working against this exact server: `usage.prompt_tokens: 20` appeared once requested).
+
+**llama-cpp-bonsai** (new `validation-bonsai-pptg.suite.yaml`, `source.mode: external`, read-only): PP 299.5, TG 16.2 tok/s, 9/10 coherence, run through the actual `run_suite()`/flat-file-storage path this time (the earlier ad hoc comparison never went through real storage) - a genuine ~7400-token unique prompt with `cache_prompt: false` via `request_extra`, confirming the earlier one-off finding now as a properly stored, reproducible result.
+
+### Real bug found and fixed live: `fixed-questions` crashed against vLLM's Ornith model
+
+`vllm-urak-pptg`'s first run crashed with `AttributeError: 'NoneType' object has no attribute 'lower'`. Root cause, confirmed via a direct `curl` against the real container: `Ornith-1.0-35B-int4-AutoRound`'s response has `message.content: null` - the entire answer sits in a non-standard `message.reasoning` field instead (`"reasoning": "...12 + 30 = 42."`, `finish_reason: "length"` - the whole token budget went into the thinking trace). Same failure MODE as the already-documented `llama-cpp-sycl` `LLAMA_ARG_REASONING` gotcha, different field name, different backend.
+
+Fixed in `llapdance/plugins/coherence/fixed_questions.py`'s `_ask()`: falls back through `content` → `reasoning_content` → `reasoning` → empty string, so a model that puts its answer somewhere non-standard gets a real, gradeable "wrong/no answer" failure instead of crashing the whole coherence run. 2 new tests (`reasoning`-field fallback, and the empty-string case when nothing is present).
+
+### Results artifact updated
+
+Regenerated with the fresh dataset: 39 real benchmark records (was 34), 5 with a real PP/TG split (was 1) - qxmx, OpenArc, vLLM, and llama.cpp-family now report real PP/TG; Arcaine confirmed genuinely blended-only, not an integration gap. Same URL, republished in place.
+
+162 passing total (2 new coherence tests on top of the prior session's 160).

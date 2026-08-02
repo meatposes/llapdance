@@ -42,3 +42,42 @@ def test_max_tokens_is_configurable_for_reasoning_models():
     finally:
         httpx.Client.__init__ = real_init
     assert seen == [512]
+
+
+def test_falls_back_to_reasoning_field_when_content_is_null():
+    # Real crash found live against vllm-urak's real Ornith-1.0-35B-int4-
+    # AutoRound: content came back null, the whole answer sitting in a
+    # `reasoning` field instead - same failure MODE as the llama-cpp-sycl
+    # LLAMA_ARG_REASONING gotcha, different field name. Used to crash with
+    # AttributeError: 'NoneType' object has no attribute 'lower'.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": None, "reasoning": "...the answer is 42."}}]},
+        )
+
+    adapter = FixedQuestionCoherence({})
+    real_init = httpx.Client.__init__
+    httpx.Client.__init__ = lambda self, *a, **kw: real_init(self, *a, **{**kw, "transport": httpx.MockTransport(handler)})
+    try:
+        result = adapter.run("http://fake", {"questions": [{"prompt": "x", "expected_keywords": ["42"]}]})
+    finally:
+        httpx.Client.__init__ = real_init
+    assert result.passed == 1
+
+
+def test_empty_string_when_no_content_or_reasoning_field_present():
+    # A real "no answer" should be a gradeable failure, not a crash and
+    # not a guess.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"choices": [{"message": {"content": None}}]})
+
+    adapter = FixedQuestionCoherence({})
+    real_init = httpx.Client.__init__
+    httpx.Client.__init__ = lambda self, *a, **kw: real_init(self, *a, **{**kw, "transport": httpx.MockTransport(handler)})
+    try:
+        result = adapter.run("http://fake", {"questions": [{"prompt": "x", "expected_keywords": ["42"]}]})
+    finally:
+        httpx.Client.__init__ = real_init
+    assert result.passed == 0
+    assert result.failures[0]["answer"] == ""

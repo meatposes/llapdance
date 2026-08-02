@@ -1,0 +1,45 @@
+# Real PP/TG validation session: hits the already-running production
+# vllm-urak container directly (source.mode: external, read-only HTTP,
+# no lifecycle of ours to manage - same practice as validation-external
+# and llama-cpp-bonsai's own external suites). Serves
+# Ornith-1.0-35B-int4-AutoRound on the "ai-network" docker network at
+# 172.28.0.5:8000 (confirmed live via `docker inspect`/`curl`, not
+# guessed).
+#
+# GOTCHA found live: vLLM's streaming response does NOT include a `usage`
+# object by default (confirmed: a plain stream had none) - the standard
+# OpenAI mechanism to force it onto the final chunk is
+# `stream_options: {"include_usage": true}`, confirmed live against this
+# exact server to actually produce a real `usage.prompt_tokens` (20 for
+# this prompt). request_extra passes it through - generic-http then
+# derives a real PP/TG split via the TTFT-based method (vLLM has no
+# server-side timings object the way llama.cpp does).
+name: validation-vllm-urak-pptg
+
+backends:
+  - name: vllm-urak-pptg
+    source:
+      mode: external
+      endpoint: "http://172.28.0.5:8000"
+    model: "Ornith-1.0-35B-int4-AutoRound"
+    device_note: "already-running production vllm-urak container, read-only, lifecycle never touched"
+
+benchmark_adapters:
+  - adapter: generic-http
+    config:
+      model: "Ornith-1.0-35B-int4-AutoRound"
+      prompt: "In one sentence, what is a hash table?"
+      max_tokens: 64
+      num_requests: 3
+      request_extra:
+        stream_options:
+          include_usage: true
+
+coherence_adapters:
+  - adapter: fixed-questions
+    config:
+      model: "Ornith-1.0-35B-int4-AutoRound"
+
+storage:
+  flat_file_dir: "./results"
+  extra_adapters: []
