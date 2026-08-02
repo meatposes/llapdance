@@ -84,6 +84,12 @@ from llapdance.plugins.registry import register
 class VLLMEngine(EngineTranslator):
     name = "vllm"
 
+    # Real images this translator's CLI/env contract was confirmed against
+    # (module docstring / VALIDATION.md): the published intel/vllm image,
+    # the intel/llm-scaler-vllm fork, and the already-running production
+    # urakozz/vllm-xpu-env container.
+    image_hints = ["intel/vllm:*", "intel/llm-scaler-vllm*", "urakozz/vllm-xpu-env*"]
+
     sweepable_params = {
         "context_size": {"type": "int", "maps_to": "--max-model-len"},
         "tensor_parallel_size": {"type": "int", "default": 1, "maps_to": "--tensor-parallel-size"},

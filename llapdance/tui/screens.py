@@ -311,20 +311,42 @@ def _local_image_options(engine: str | None = None) -> list[tuple[str, str]]:
     this listed every local image regardless of engine, and the picker
     defaulted to whatever docker returned first - which was an unrelated
     `arcaine-server:qwen35fix` image while the engine was `qxmx`, silently
-    filling both the Select AND the Input with a mismatched image. Filter
-    to tags containing the engine name (same substring `name_filter`
-    `list_images` already supports, e.g. "qxmx" matches
-    `llapdance/qxmx-from-source:...`, "arcaine" matches `arcaine-server:*`)
-    so the default can't come from an unrelated engine's image."""
+    filling both the Select AND the Input with a mismatched image.
+
+    Filters by the engine's own `image_hints` (real glob patterns of tags
+    it's actually been validated/run against - see EngineTranslator's
+    docstring, llapdance/plugins/base.py) when the registered engine
+    declares any. Falls back to a plain substring match on the engine
+    name (the previous, cruder behavior) for an engine that hasn't
+    declared hints yet, rather than showing nothing - e.g. this caught
+    that `llama-cpp-sycl`'s real validated image is tagged
+    `llama-cpp-bonsai:*`, which the old substring-on-engine-name approach
+    would never have matched at all."""
+    import fnmatch
+
     from llapdance.plugins.execution.local_docker import LocalDockerExecutionTarget
+    from llapdance.plugins.registry import get as get_adapter
+
+    hints: list[str] = []
+    if engine:
+        try:
+            hints = list(get_adapter("engine", engine).image_hints)
+        except KeyError:
+            hints = []
 
     try:
-        images = list_images(LocalDockerExecutionTarget({}), catalog_dir="./results", name_filter=engine)
+        # hints (if any) do their own matching below; only use the crude
+        # substring name_filter when there's nothing better to go on
+        images = list_images(
+            LocalDockerExecutionTarget({}), catalog_dir="./results", name_filter=None if hints else engine
+        )
     except Exception:
         return []
     options = []
     for image in images:
         for tag in image["tags"]:
+            if hints and not any(fnmatch.fnmatch(tag, pattern) for pattern in hints):
+                continue
             options.append((tag, tag))
     return options
 

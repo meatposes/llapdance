@@ -41,6 +41,11 @@ _KV_QUANT_MAP = {"f16": "fp16", "q8_0": "q8_0", "f8": "fp8"}
 class QxmxEngine(EngineTranslator):
     name = "qxmx"
 
+    # Real tags this engine has actually been run against (see
+    # VALIDATION.md's qxmx sections: qxmx:latest, the ad-hoc dev tags
+    # listed by a real `docker images`, and the from-source build tag).
+    image_hints = ["qxmx:*", "llapdance/qxmx-from-source:*"]
+
     sweepable_params = {
         "context_size": {"type": "int", "default": 4096, "maps_to": "--ctx-per-slot"},
         "kv_cache_quant": {"type": "str", "values": ["f16", "q8_0", "f8"], "maps_to": "--ctk (spelling translated per value)"},

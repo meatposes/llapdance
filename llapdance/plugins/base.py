@@ -162,6 +162,22 @@ class EngineTranslator(ABC):
     actual backend source rather than guessed at. Same entry shape as
     sweepable_params, plus a "source" note where the flag was found."""
 
+    image_hints: list[str] = []
+    """fnmatch-style glob patterns matching docker image tags known to
+    actually implement this engine's command/env contract (e.g. qxmx's
+    `["qxmx:*", "llapdance/qxmx-from-source:*"]`) - populated only from
+    real image tags this engine was actually validated/run against (see
+    VALIDATION.md), never guessed at. This is a real gap this project had
+    with NO answer at all until now: nothing previously stopped an
+    architecturally-incompatible image (e.g. an OpenArc/OpenVINO image)
+    from being wired into, say, a qxmx backend - the mismatch would only
+    ever surface as a real container crash at run time, never caught
+    earlier. Used to filter the image picker (llapdance/tui/screens.py's
+    `_local_image_options`) down to plausibly-compatible images - like
+    `sweepable_params`/`known_env_flags`, this is a hint for tooling, NOT
+    an enforced/validated guarantee: a tag matching a hint could still be
+    a stale build or the wrong architecture underneath."""
+
     @abstractmethod
     def build(
         self,
