@@ -76,9 +76,17 @@ class LlamaCppSyclEngine(EngineTranslator):
     # directly via `env.<NAME>` on the backend config (validated live: a
     # real 2-value sweep of GGML_OP_OFFLOAD_MIN_BATCH landed correctly
     # inside a real running container, confirmed via `docker exec`).
-    # Found by reading ggml-sycl's actual source (getenv() call sites),
-    # not guessed at - not an exhaustive list of every GGML_* flag that
-    # exists, just the ones confirmed real this way.
+    #
+    # Direct user feedback: the sweep options "do not actually contain some
+    # of the flags that can tune performance" - correct, this catalog was
+    # previously built from a naive `grep getenv(` (3 flags), which MISSED
+    # every flag read through ggml-sycl's own `ggml_sycl_get_env()` helper
+    # (common.cpp) instead of a bare `getenv()` call. Re-derived from this
+    # project's own local checkout (~/llama.cpp.git/llama.cpp,
+    # ggml/src/ggml-sycl/{ggml-sycl.cpp,fattn.cpp,fattn-mkl.cpp}) - every
+    # `ggml_sycl_get_env(...)` AND bare `getenv(...)` call site, not
+    # guessed. This is what "turn graph on/off for intel" (the user's own
+    # example) turned out to be: `GGML_SYCL_ENABLE_GRAPH`, below.
     known_env_flags = {
         "GGML_SYCL_NO_PINNED": {
             "type": "presence (any non-empty value disables pinned host memory)",
@@ -94,6 +102,34 @@ class LlamaCppSyclEngine(EngineTranslator):
             "instead, see module docstring) - listed here only because it's a real flag this "
             "backend's binary reads, in case a suite needs to set it directly via raw env passthrough.",
         },
+        "GGML_SYCL_ENABLE_GRAPH": {
+            "type": "int (0/1)", "default": 0,
+            "note": "direct user ask ('turn graph on/off for intel') - this is it: enables SYCL "
+            "command-graph capture/replay for the compute graph. GOTCHA: gated behind a BUILD-TIME "
+            "cmake option (GGML_SYCL_GRAPH, ggml/src/ggml-sycl/CMakeLists.txt) - if the image wasn't "
+            "compiled with it, this env var is a silent no-op (the binary logs 'graph disabled by "
+            "compile flag' at startup). NOT confirmed which locally-built images (if any) were "
+            "compiled with GGML_SYCL_GRAPH - check the container's own startup log before trusting a "
+            "sweep of this to do anything.",
+            "source": "ggml/src/ggml-sycl/ggml-sycl.cpp:290,332-377",
+        },
+        "GGML_SYCL_ENABLE_OPT": {"type": "int (0/1)", "default": 1, "note": "master toggle for ggml-sycl's graph-level op optimization pass"},
+        "GGML_SYCL_ENABLE_DNN": {"type": "int (0/1)", "default": 1, "note": "master toggle for oneDNN kernel usage - a real, previously-confirmed-impactful lever (see Arcaine's DIFF_ONEDNN_SDPA A/B, same underlying library)"},
+        "GGML_SYCL_FA_ONEDNN": {"type": "int (0/1)", "default": 1, "note": "flash-attention specifically via the fused-XMX oneDNN SDPA path (fattn-onednn.cpp) vs the non-oneDNN flash-attn path"},
+        "GGML_SYCL_FA_ONEDNN_MAX_KV": {"type": "int", "default": 0, "note": "KV-length cap above which the oneDNN flash-attn path is skipped (0 = no cap)"},
+        "GGML_SYCL_ENABLE_MKL_FA": {"type": "int (0/1)", "default": 1, "note": "flash-attention via the oneMKL GEMM path toggle"},
+        "GGML_SYCL_MKL_FA_Q_TILE": {"type": "int", "default": 8192, "note": "query-tile size for the oneMKL flash-attn path"},
+        "GGML_SYCL_MKL_FA_DEBUG": {"type": "int (0/1)", "default": 0, "note": "debug output, not a perf switch"},
+        "GGML_SYCL_MKL_FA_DIAG": {"type": "int (0/1)", "default": 0, "note": "debug diagnostics, not a perf switch"},
+        "GGML_SYCL_ENABLE_VMM": {"type": "int (0/1)", "default": 1, "note": "SYCL virtual-memory-management allocator path toggle"},
+        "GGML_SYCL_ENABLE_FUSION": {"type": "int (0/1)", "default": 1, "note": "op-fusion optimization toggle (see fusion.hpp)"},
+        "GGML_SYCL_PRIORITIZE_DMMV": {"type": "int (0/1)", "default": 0, "note": "prioritizes the dequantize-matmul-vec kernel path over alternatives"},
+        "GGML_SYCL_DEV2DEV_MEMCPY": {"type": "int (0=SYCL, 1=level-zero, 2=forward)", "default": 0, "note": "device-to-device copy implementation selector (ggml_sycl_dev2dev_memcpy_mode enum)"},
+        "GGML_SYCL_ENABLE_FLASH_ATTN": {"type": "int (0/1)", "default": 1, "note": "master flash-attention toggle across all SYCL FA paths"},
+        "GGML_SYCL_USM_SYSTEM": {"type": "int (0/1)", "default": 0, "note": "use USM system-memory allocations instead of device allocations"},
+        "GGML_SYCL_USE_ASYNC_MEM_OP": {"type": "int (0/1)", "default": 1, "note": "async USM alloc/free path toggle - independent of graph capture, useful outside it too"},
+        "GGML_SYCL_USE_LEVEL_ZERO_API": {"type": "int (0/1)", "default": 1, "note": "use the level-zero backend API directly vs the generic SYCL API, when available"},
+        "GGML_SYCL_DEBUG": {"type": "int (0/1)", "default": 0, "note": "debug logging, not a perf switch"},
     }
     # GGML_SYCL_DNNL (whether oneDNN kernels are linked in at all, e.g. for
     # flash-attention) is a BUILD-TIME cmake option (`-DGGML_SYCL_DNNL=0|1`,

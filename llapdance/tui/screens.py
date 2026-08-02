@@ -74,6 +74,30 @@ def _coerce_sweep_value(raw: str) -> Any:
     return raw
 
 
+def _parse_sweep_axes_text(text: str) -> list[dict[str, Any]]:
+    """Parses the `#sweep-axes` box's `param=values` lines (one per axis,
+    blank lines ignored) into real `{"param", "values"}` dicts - the same
+    shape `SweepAxis` expects. Direct user request: sweeping several
+    params "at a time" - each line becomes one more axis in the cartesian
+    product `llapdance/config/sweep.py` already expands at run time; this
+    is purely a TUI-side parser, the multi-axis mechanism itself already
+    existed and was already validated (see VALIDATION.md)."""
+    axes = []
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        line = line.strip()
+        if not line:
+            continue
+        if "=" not in line:
+            raise ValueError(f"sweep axis line {lineno} ({line!r}) must be 'param=values', e.g. 'params.shared.context_size=2048,4096'")
+        param, raw_values = line.split("=", 1)
+        param = param.strip()
+        values = [_coerce_sweep_value(v.strip()) for v in raw_values.split(",") if v.strip()]
+        if not param or not values:
+            raise ValueError(f"sweep axis line {lineno} ({line!r}) needs both a param and at least one value")
+        axes.append({"param": param, "values": values})
+    return axes
+
+
 def _short_model_name(path: str) -> str:
     """Real complaint fixed: the model table showed the FULL absolute host
     path (e.g. `/mnt/ignite/LLM/models/AEON-7/Ornith-1.0-...`), both as a
@@ -411,6 +435,14 @@ class BuildScreen(Screen):
             with Horizontal():
                 yield Select([], id="sweep-param", allow_blank=True, prompt="sweep param (optional)")
                 yield Input(placeholder="sweep values, e.g. 2048,4096", id="sweep-values")
+                yield Button("+ axis", id="add-sweep-btn")
+            # Direct user feedback: sweeping was "one at a time" - this box
+            # holds one `param=values` line per axis (editable directly, or
+            # built up via the Select/Input/+axis row above), so multiple
+            # axes can be swept together as a real cartesian product (the
+            # underlying mechanism, llapdance/config/sweep.py, already
+            # supported this - only the TUI was single-axis).
+            yield TextArea("", id="sweep-axes")
             with Horizontal():
                 yield Button("Generate", id="generate-btn", variant="primary")
                 yield Button("Run ▶", id="launch-btn", variant="success")
@@ -439,6 +471,26 @@ class BuildScreen(Screen):
             self.action_launch()
         elif event.button.id == "back-btn":
             self.action_back()
+        elif event.button.id == "add-sweep-btn":
+            self.action_add_sweep_axis()
+
+    def action_add_sweep_axis(self) -> None:
+        """Appends the current sweep-param/sweep-values builder row as one
+        more line in `#sweep-axes`, then clears the builder row so the same
+        two widgets can be reused to add another axis - direct user
+        request: the sweep needs "the ability to select several at a
+        time", not just one param per run."""
+        sweep_param = self.query_one("#sweep-param", Select).value
+        sweep_values_raw = self.query_one("#sweep-values", Input).value.strip()
+        if sweep_param == Select.NULL or not sweep_values_raw:
+            self.query_one("#build-status", Static).update("[red]pick a sweep param and enter values first[/red]")
+            return
+        axes_box = self.query_one("#sweep-axes", TextArea)
+        existing = axes_box.text
+        prefix = existing if (not existing or existing.endswith("\n")) else existing + "\n"
+        axes_box.text = f"{prefix}{sweep_param}={sweep_values_raw}\n"
+        self.query_one("#sweep-values", Input).value = ""
+        self.query_one("#sweep-param", Select).value = Select.NULL
 
     def on_select_changed(self, event: Select.Changed) -> None:
         # picking a real local image fills the free-text field too, so
@@ -523,18 +575,38 @@ class BuildScreen(Screen):
         }
 
         # Real sweep mechanism (SPEC.md §10, llapdance/config/sweep.py) -
-        # this ONE backend config expands into one real run per value at
-        # `run_suite` time, same as any hand-written sweep suite. Values
-        # are parsed as int/float where possible so e.g. context_size
-        # sweeps as real numbers, not strings that happen to look numeric.
+        # this ONE backend config expands into the cartesian product of
+        # every axis's values at `run_suite` time, same as any hand-written
+        # sweep suite. Direct user request: sweeping needs to handle
+        # SEVERAL params at once, not just one - axes come from the
+        # `#sweep-axes` box (one `param=values` line each), with whatever's
+        # still sitting unclicked in the param/values builder row folded in
+        # too, so a user doesn't have to click "+ axis" for a single-axis
+        # sweep.
+        try:
+            axes = _parse_sweep_axes_text(self.query_one("#sweep-axes", TextArea).text)
+        except ValueError as exc:
+            self.query_one("#build-status", Static).update(f"[red]{exc}[/red]")
+            return
+
         sweep_param = self.query_one("#sweep-param", Select).value
         sweep_values_raw = self.query_one("#sweep-values", Input).value.strip()
         if sweep_param != Select.NULL and sweep_values_raw:
             values = [_coerce_sweep_value(v.strip()) for v in sweep_values_raw.split(",") if v.strip()]
-            suite_dict["backends"][0]["sweep"] = [{"param": sweep_param, "values": values}]
+            axes.append({"param": sweep_param, "values": values})
+
+        if axes:
+            suite_dict["backends"][0]["sweep"] = axes
 
         self.query_one("#yaml-preview", TextArea).text = yaml.safe_dump(suite_dict, sort_keys=False)
-        sweep_note = f" ({len(values)} runs, sweeping {sweep_param})" if sweep_param != Select.NULL and sweep_values_raw else ""
+        if axes:
+            total_runs = 1
+            for axis in axes:
+                total_runs *= len(axis["values"])
+            params_list = ", ".join(axis["param"] for axis in axes)
+            sweep_note = f" ({total_runs} runs, sweeping {params_list})"
+        else:
+            sweep_note = ""
         self.query_one("#build-status", Static).update(f"Generated{sweep_note} - edit above if needed, then Run.")
 
     def action_launch(self) -> None:
