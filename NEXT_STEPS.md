@@ -163,6 +163,10 @@ Real gap fixed: llama-cpp-sycl's known_env_flags catalog was missing 15 of 18 re
 
 TUI sweep was single-axis only; added a `+ axis` button + a height-capped `#sweep-axes` box holding one `param=values` line per axis, parsed and combined into the real cartesian-product sweep mechanism (which already supported multiple axes - only the TUI input was the bottleneck). 151 passing.
 
+## Twenty-eighth session addendum
+
+Extended generic-http to report a real PP/TG split (llama.cpp's own server-side timings preferred, TTFT-derived split from usage.prompt_tokens+completion_tokens as fallback, omitted entirely when neither signal exists - no fabricated numbers). Live-compared against the one stored llama-benchy result (same model, same real production llama-cpp-bonsai container): lined up well (PP 297.6 vs 335.7 tok/s, TG 16.3 vs 17.3 tok/s) once a real gotcha was controlled for - llama.cpp's default prompt caching makes a short/repeated prompt report a near-meaningless PP number (confirmed live: 18 of 22 prompt tokens served from cache on a repeat request). Added `request_extra` config passthrough (e.g. `{"cache_prompt": false}`) to get an honest measurement. 160 passing. Production container confirmed untouched throughout.
+
 ## Recommended next session
 
 Per the (now mostly-addressed) spec review, remaining real gaps in priority order:
