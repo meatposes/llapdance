@@ -187,6 +187,12 @@ Confirmed the TUI has no benchmark/coherence adapter picker - hardcoded to gener
 
 Real gap still open, worth a future session: no benchmark_adapters/coherence_adapters picker in the TUI at all - a Select for these would close the "decided for you" complaint properly instead of relying on YAML hand-editing.
 
+## Thirty-second session addendum
+
+Confirmed sweep mechanism is a real cartesian product (verified live: 3 binary axes -> 8 combos, matching the user's referenced factorial-design chart) - nothing to fix. Found and fixed a real bug via a direct live llama-benchy-vs-generic-http comparison on the same qxmx server: qxmx sends an SSE comment/keepalive line (": hb") during a long prefill, which our TTFT capture wrongly treated as the first real byte, corrupting all ttft_split-derived PP/TG. Fixed (skip lines starting with ":" per SSE spec). Verified: TG now matches llama-benchy within 0.2%. PP improved by ~30x but still ~3x above llama-benchy even at matched token count - likely a tokenizer-count mismatch in llama-benchy's own prompt construction (real supporting evidence, not fully confirmed) - left open rather than guessed at. 176 passing.
+
+Open item: residual ~3x PP gap between our ttft_split derivation and llama-benchy even after the heartbeat fix, cause not fully confirmed (leading hypothesis: llama-benchy's tokenizer resolution for an unmapped model id). Would need a real matching HF tokenizer id for this GGUF checkpoint to resolve properly.
+
 ## Recommended next session
 
 Per the (now mostly-addressed) spec review, remaining real gaps in priority order:
